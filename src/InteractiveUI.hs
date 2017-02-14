@@ -135,7 +135,7 @@ import           GHC.Exts ( unsafeCoerce# )
 import           GHC.IO.Exception ( IOErrorType(InvalidArgument) )
 import           GHC.IO.Handle ( hFlushAll )
 import           GHC.TopHandler ( topHandler )
-
+import TypeCompletion
 #if __GLASGOW_HASKELL__ >= 800
 packageString :: UnitId -> String
 packageString = unitIdString
@@ -249,6 +249,7 @@ ghciCommands = [
   ("uses",      keepGoing' findAllUses,         noCompletion),
   ("loc-at",    keepGoing' locationAt,          noCompletion),
   ("complete-at", keepGoing' completeAt,          noCompletion),
+  ("complete-at-type", keepGoing' completeAtType,          noCompletion),
   ("trace",     keepGoing traceCmd,             completeExpression),
   ("undef",     keepGoing undefineMacro,        completeMacro),
   ("unset",     keepGoing unsetOptions,         completeSetOptions)
@@ -1249,7 +1250,7 @@ info allInfo s  = handleSourceError GHC.printException $ do
 
 infoThing :: GHC.GhcMonad m => Bool -> String -> m SDoc
 infoThing allInfo str = do
-    names     <- GHC.parseName str
+    names     <- GHC.parseName str -- identifiers in the current context
     mb_stuffs <- mapM (GHC.getInfo allInfo) names
     let filtered = filterOutChildren (\(t,_f,_ci,_fi) -> t) (catMaybes mb_stuffs)
     return $ vcat (intersperse (text "") $ map pprInfo filtered)
@@ -1808,6 +1809,27 @@ locationAt str =
           ")-(" ++
           show (srcSpanEndLine span')  ++ "," ++
           show (srcSpanEndCol span') ++ ")"
+
+-----------------------------------------------------------------------------
+-- :complete-at-type
+
+completeAtType :: String -> InputT GHCi ()
+completeAtType str =
+  handleSourceError GHC.printException $
+  case parseSpan str of
+    Left err -> liftIO (putStr err)
+    Right (fp,_sl,_sc,_el,_ec,sample)
+      | not (null str) -> do
+          infos <- fmap mod_infos (lift getGHCiState)
+          result <- findCompletionsWithType infos fp sample 
+          case result of
+            Left err -> error err
+            Right completions' ->liftIO $ forM_ completions' $ \(ident,ty) ->
+              case ty of
+                Just t -> putStrLn $ ident ++ " :: " ++ t
+                Nothing -> putStrLn $ ident 
+    _ -> return ()
+
 
 -----------------------------------------------------------------------------
 -- :complete-at
