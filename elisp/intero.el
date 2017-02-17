@@ -650,7 +650,15 @@ Other arguments are IGNORED."
            (cons :async
                  (-partial 'intero-company-callback
                            (current-buffer)
-                           prefix-info))))))))
+                           prefix-info))))))
+    (meta       (get-text-property 0 :type arg))
+    (annotation (intero-company-annotation arg))
+    ))
+
+(defun intero-company-annotation (candidate)
+  (concat " " (get-text-property 0 :type candidate)))
+(defun intero-company-meta (candidate)
+  (concat " " (get-text-property 0 :type candidate)))
 
 (defun intero-company-callback (source-buffer prefix-info cont)
   "Generate completions for SOURCE-BUFFER based on PREFIX-INFO and call CONT on the results."
@@ -1543,7 +1551,7 @@ Prefix is marked by positions BEG and END.  Completions are
 passed to CONT in SOURCE-BUFFER."
   (intero-async-call
    'backend
-   (format ":complete-at %S %d %d %d %d %S"
+   (format ":complete-at-type %S %d %d %d %d %S"
            (intero-localize-path (intero-temp-file-name))
            (save-excursion (goto-char beg)
                            (line-number-at-pos))
@@ -1564,8 +1572,13 @@ passed to CONT in SOURCE-BUFFER."
             (list)
           (mapcar
            (lambda (x)
-             (replace-regexp-in-string "\\\"" "" x))
+             (intero-parse-typed-candidate 
+              (replace-regexp-in-string "\\\"" "" x)))
            (split-string reply "\n" t))))))))
+(defun intero-parse-typed-candidate (str)
+  (string-match "\\(.*\\) :: \\(.*\\)" str)
+  (propertize (match-string 1 str) :type (match-string 2 str))
+  )
 
 (defun intero-get-repl-completions (source-buffer prefix cont)
   "Get REPL completions and send to SOURCE-BUFFER.
