@@ -94,6 +94,7 @@ import           System.Console.Haskeline as Haskeline
 import           Control.Applicative hiding (empty)
 import           Control.Monad as Monad
 import           Control.Monad.Trans.Class
+import           Control.Monad.Trans.Except
 import           Control.Monad.IO.Class
 
 import           Data.Array
@@ -1812,22 +1813,21 @@ locationAt str =
 
 -----------------------------------------------------------------------------
 -- :complete-at-type
-
 completeAtType :: String -> InputT GHCi ()
-completeAtType str =
-  handleSourceError GHC.printException $
+completeAtType str = handleSourceError GHC.printException $ do
+  df <- getDynFlags  
   case parseSpan str of
     Left err -> liftIO (putStr err)
     Right (fp,_sl,_sc,_el,_ec,sample)
       | not (null str) -> do
           infos <- fmap mod_infos (lift getGHCiState)
-          result <- findCompletionsWithType infos fp sample 
+          result <- runExceptT $ findCompletionsWithType infos fp sample 
           case result of
-            Left err -> error err
-            Right completions' ->liftIO $ forM_ completions' $ \(ident,ty) ->
-              case ty of
-                Just t -> putStrLn $ ident ++ " :: " ++ t
-                Nothing -> putStrLn $ ident 
+            Left err -> error $ showSDocForUser df alwaysQualify err
+            Right completions' ->liftIO $ forM_ completions' $ \c ->
+              case cType c of
+                Just t -> putStrLn $ cId c ++ " :: " ++ t
+                Nothing -> putStrLn $ cId c
     _ -> return ()
 
 

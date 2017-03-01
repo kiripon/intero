@@ -1,5 +1,5 @@
 {-# LANGUAGE CPP                      #-}
-
+{-# LANGUAGE OverloadedStrings        #-}
 {-# LANGUAGE NondecreasingIndentation #-}
 {-# LANGUAGE ScopedTypeVariables      #-}
 
@@ -24,14 +24,13 @@ import Control.Monad.Trans.Class
 import Control.Monad.Trans.Except
 import Control.Monad.Trans.Maybe
 import           ConLike
-import           Data.Monoid      (First (..))
 import           GHC
 import           GhciInfo         (showppr)
 import           GhciTypes
 import           GhcMonad
 import           System.Directory
 import           Var
-
+import Outputable
 data Candidate = MkCandidate
   { cId     :: String
   , cType   :: Maybe String
@@ -50,17 +49,15 @@ findCompletionsWithType :: (GhcMonad m)
                 => Map ModuleName ModInfo
                 -> FilePath
                 -> String
-                -> m (Either String [Candidate])
+                -> ExceptT SDoc m [Candidate]
 findCompletionsWithType infos fp sample = do
-  mname <- guessModule infos fp
-  case mname of
-    Nothing -> return (Left "Couldn't guess that module name. Does it exist?")
-    Just name -> case M.lookup name infos of
-      Nothing -> return (Left "No module info for the current file! Try loading it?")
-      Just moduleInf -> do
-        globalNames <- findGlobalCandidates sample moduleInf
-        localNames  <- findLocalCandidates (modinfoSpans moduleInf) sample
-        return (Right (take 50 (nub (localNames ++ globalNames))))
+  mname <- maybeToExceptT "Couldn't guess that module name. Does it exist?" $
+           guessModule infos fp
+  minfo <- maybeToExceptT "No module info for the current file! Try loading it?" $
+           MaybeT . pure $ M.lookup mname infos
+  globalNames <- lift $ findGlobalCandidates sample minfo
+  localNames  <- lift $ findLocalCandidates (modinfoSpans minfo) sample
+  return (take 50 (nub (localNames ++ globalNames)))
 
 findGlobalCandidates :: GhcMonad m
   => String
