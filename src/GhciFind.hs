@@ -30,7 +30,10 @@ import           Name
 import           SrcLoc
 import           System.Directory
 import           Var
-
+import Control.Monad.Trans.Maybe
+import Control.Monad.Trans.Class
+import Control.Monad.Trans.Except
+import Control.Monad
 -- | Check if there is are imported modules that should be searched
 -- for the completion sample string. If so, returns the name qualifier
 -- (i.e. module name or alias), the identifier prefix to search for,
@@ -62,41 +65,34 @@ findCompletions :: (GhcMonad m)
                 -> Int
                 -> Int
                 -> m (Either String [String])
-findCompletions infos fp sample sl sc el ec =
-  do mname <- guessModule infos fp
-     case mname of
-       Nothing ->
-         return (Left "Couldn't guess that module name. Does it exist?")
-       Just name ->
-         case M.lookup name infos of
-           Nothing ->
-             return (Left ("No module info for the current file! Try loading it?"))
-           Just moduleInf ->
-             do df <- getDynFlags
-                (qual, ident, minfs) <-
-                   let noQual = ("", sample, [modinfoInfo moduleInf])
-                       getModInfo qmname =
-                         findModule qmname Nothing >>= getModuleInfo
-                   in if '.' `elem` sample
-                      then case findQualifiedSource
+findCompletions infos fp sample sl sc el ec = runExceptT $ do
+  name <- maybeToExceptT "Couldn't guess that module name. Does it exist?" $
+          guessModule infos fp
+  moduleInf <- maybeToExceptT "No module info for the current file! Try loading it?" $
+               MaybeT . pure $ M.lookup name infos
+  df <- getDynFlags
+  (qual,ident,minfs) <-
+    let noQual = ("", sample, [modinfoInfo moduleInf])
+        getModInfo :: GhcMonad m => ModuleName -> m (Maybe ModuleInfo)
+        getModInfo qmname = findModule qmname Nothing >>= getModuleInfo
+    in fromMaybeT noQual $ do
+    guard ('.' `elem` sample) 
+    (qual, ident, qualModNames) <- MaybeT . pure $ findQualifiedSource
                                    (map unLoc (modinfoImports moduleInf))
-                                   sample of
-                              Just (qual, ident, qualModNames) -> do
-                                minfos <- fmap catMaybes
-                                               (mapM getModInfo qualModNames)
-                                if null minfos
-                                   then return noQual
-                                   else return (qual, ident, minfos)
-                              Nothing -> return noQual
-                      else return noQual
-                let toplevelNames = concat (mapMaybe modInfoTopLevelScope minfs)
-                    filteredToplevels =
-                      map (qual ++)
+                                   sample
+    minfos <- lift $ lift $ catMaybes <$> mapM getModInfo qualModNames
+    guard (null minfos)
+    return (qual,ident,minfos)
+  let toplevelNames = concat (mapMaybe modInfoTopLevelScope minfs)
+      filteredToplevels = map (qual ++)
                           (filter (isPrefixOf ident)
-                                  (map (showppr df) toplevelNames))
-                localNames <- findLocalizedCompletions (modinfoSpans moduleInf)
-                                                       sample sl sc el ec
-                return (Right (take 30 (nub (localNames ++ filteredToplevels))))
+                            (map (showppr df) toplevelNames))
+  localNames <- lift $ findLocalizedCompletions (modinfoSpans moduleInf)
+                                        sample sl sc el ec
+  return $ take 30 (nub (localNames ++ filteredToplevels))
+  where
+    fromMaybeT :: Monad m => a -> MaybeT m a -> m a
+    fromMaybeT a act = fromMaybe a <$> runMaybeT act
 
 -- | Find completions within the local scope of a definition of a
 -- module.
@@ -132,7 +128,7 @@ findNameUses :: (GhcMonad m)
              -> Int
              -> m (Either String [SrcSpan])
 findNameUses infos fp string sl sc el ec =
-  do mname <- guessModule infos fp
+  do mname <- runMaybeT $ guessModule infos fp
      case mname of
        Nothing ->
          return (Left "Couldn't guess that module name. Does it exist?")
@@ -208,30 +204,19 @@ findLoc :: (GhcMonad m)
         -> Int
         -> Int
         -> m (Either String SrcSpan)
-findLoc infos fp string sl sc el ec =
-  do mname <- guessModule infos fp
-     case mname of
-       Nothing ->
-         return (Left "Couldn't guess that module name. Does it exist?")
-       Just name ->
-         case M.lookup name infos of
-           Nothing ->
-             return (Left ("No module info for the current file! Try loading it?"))
-           Just info ->
-             do mname' <- findName infos info string sl sc el ec
-                d <- getSessionDynFlags
-                case mname' of
-                  Left reason ->
-                    return (Left reason)
-                  Right name' ->
-                    case getSrcSpan name' of
-                      UnhelpfulSpan{} ->
-                        return (Left ("Found a name, but no location information. The module is: " ++
-                                      maybe "<unknown>"
-                                            (showppr d . moduleName)
-                                            (nameModule_maybe name')))
-                      span' ->
-                        return (Right span')
+findLoc infos fp string sl sc el ec = runExceptT $ 
+  do mname <- maybeToExceptT "Couldn't guess that module name. Does it exist?"
+              $ guessModule infos fp
+     info  <- maybeToExceptT "No module info for the current file! Try loading it?"
+              $ MaybeT . pure $ M.lookup mname infos
+     name' <- ExceptT $ findName infos info string sl sc el ec
+     d <- lift getSessionDynFlags
+     case getSrcSpan name' of
+       UnhelpfulSpan{} ->
+         throwE ("Found a name, but no location information. The module is: " ++
+                  maybe "<unknown>" (showppr d . moduleName)
+                  (nameModule_maybe name'))
+       span' -> return span'
 
 -- | Try to resolve the name located at the given position, or
 -- otherwise resolve based on the current module's scope.
@@ -332,7 +317,7 @@ findType :: GhcMonad m
          -> Int
          -> m FindType
 findType infos fp string sl sc el ec =
-  do mname <- guessModule infos fp
+  do mname <- runMaybeT $ guessModule infos fp
      case mname of
        Nothing ->
          return (FindTypeFail "Couldn't guess that module name. Does it exist?")
@@ -388,29 +373,29 @@ contains spanSL spanSC spanEL spanEC (SpanInfo ancestorSL ancestorSC ancestorEL 
 
 -- | Guess a module name from a file path.
 guessModule :: GhcMonad m
-            => Map ModuleName ModInfo -> FilePath -> m (Maybe ModuleName)
-guessModule infos fp =
-  do target <- guessTarget fp Nothing
-     case targetId target of
-       TargetModule mn -> return (Just mn)
-       TargetFile fp' _ ->
-         case find ((Just fp' ==) .
-                    ml_hs_file . ms_location . modinfoSummary . snd)
-                   (M.toList infos) of
-           Just (mn,_) -> return (Just mn)
-           Nothing ->
-             do fp'' <- liftIO (makeRelativeToCurrentDirectory fp')
-                target' <- guessTarget fp'' Nothing
-                case targetId target' of
-                  TargetModule mn ->
-                    return (Just mn)
-                  _ ->
-                    case find ((Just fp'' ==) .
-                               ml_hs_file . ms_location . modinfoSummary . snd)
-                              (M.toList infos) of
-                      Just (mn,_) ->
-                        return (Just mn)
-                      Nothing -> return Nothing
+            => Map ModuleName ModInfo -> FilePath -> MaybeT m ModuleName
+guessModule infos fp = do
+    target <- lift $ guessTarget fp Nothing
+    case targetId target of
+        TargetModule mn  -> return mn
+        TargetFile fp' _ -> guessModule' fp'
+  where
+    guessModule' :: GhcMonad m => FilePath -> MaybeT m ModuleName
+    guessModule' fp' = case findModByFp fp' of
+        Just mn -> return mn
+        Nothing -> do
+            fp'' <- liftIO (makeRelativeToCurrentDirectory fp')
+
+            target' <- lift $ guessTarget fp'' Nothing
+            case targetId target' of
+                TargetModule mn -> return mn
+                _               -> MaybeT . pure $ findModByFp fp''
+
+    findModByFp :: FilePath -> Maybe ModuleName
+    findModByFp fp' = fst <$> find ((Just fp' ==) . mifp) (M.toList infos)
+      where
+        mifp :: (ModuleName, ModInfo) -> Maybe FilePath
+        mifp = ml_hs_file . ms_location . modinfoSummary . snd
 
 -- | Lookup the name of something in the current context.
 lookupNamesInContext :: GhcMonad m => String -> m [Name]

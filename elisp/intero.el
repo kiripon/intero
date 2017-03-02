@@ -123,7 +123,13 @@ To use this, use the following mode hook:
   (add-hook 'haskell-mode-hook 'intero-mode-blacklist)"
   :group 'intero
   :type 'string)
-
+(defcustom intero-show-annotation
+  nil
+  "Specify what to be shown in annotation."
+  :group 'intero
+  :type '(choice (const :tag "nil" nil)
+                 (const :tag "Type" :type)
+                 (const :tag "Module" :module)))
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Modes
 
@@ -651,13 +657,15 @@ Other arguments are IGNORED."
                  (-partial 'intero-company-callback
                            (current-buffer)
                            prefix-info))))))
-    (meta       (get-text-property 0 :type arg))
-    (annotation (intero-company-annotation arg))
+    (meta       (intero-meta arg))
+    (annotation (intero-annotation arg))
     ))
 
-(defun intero-company-annotation (candidate)
-  (concat " " (get-text-property 0 :type candidate)))
-(defun intero-company-meta (candidate)
+(defun intero-annotation (candidate)
+  (when intero-show-annotation
+    (concat " " (get-text-property 0 intero-show-annotation candidate))))
+
+(defun intero-meta (candidate)
   (concat " " (get-text-property 0 :type candidate)))
 
 (defun intero-company-callback (source-buffer prefix-info cont)
@@ -1549,36 +1557,42 @@ type as arguments."
   "Get completions and send to SOURCE-BUFFER.
 Prefix is marked by positions BEG and END.  Completions are
 passed to CONT in SOURCE-BUFFER."
-  (intero-async-call
-   'backend
-   (format ":complete-at-type %S %d %d %d %d %S"
-           (intero-localize-path (intero-temp-file-name))
-           (save-excursion (goto-char beg)
-                           (line-number-at-pos))
-           (save-excursion (goto-char beg)
-                           (1+ (current-column)))
-           (save-excursion (goto-char end)
-                           (line-number-at-pos))
-           (save-excursion (goto-char end)
-                           (1+ (current-column)))
-           (buffer-substring-no-properties beg end))
-   (list :cont cont :source-buffer source-buffer)
-   (lambda (state reply)
-     (with-current-buffer
-         (plist-get state :source-buffer)
-       (funcall
-        (plist-get state :cont)
-        (if (string-match "^*** Exception" reply)
-            (list)
-          (mapcar
-           (lambda (x)
-             (intero-parse-typed-candidate 
-              (replace-regexp-in-string "\\\"" "" x)))
-           (split-string reply "\n" t))))))))
-(defun intero-parse-typed-candidate (str)
-  (string-match "\\(.*\\) :: \\(.*\\)" str)
-  (propertize (match-string 1 str) :type (match-string 2 str))
-  )
+  (let ((format-str (if intero-show-annotation
+                        ":complete-at-type %S %d %d %d %d %S"
+                      ":complete-at %S %d %d %d %d %S")))
+    (intero-async-call
+     'backend
+     (format format-str
+             (intero-localize-path (intero-temp-file-name))
+             (save-excursion (goto-char beg)
+                             (line-number-at-pos))
+             (save-excursion (goto-char beg)
+                             (1+ (current-column)))
+             (save-excursion (goto-char end)
+                             (line-number-at-pos))
+             (save-excursion (goto-char end)
+                             (1+ (current-column)))
+             (buffer-substring-no-properties beg end))
+     (list :cont cont :source-buffer source-buffer)
+     (lambda (state reply)
+       (with-current-buffer
+           (plist-get state :source-buffer)
+         (funcall
+          (plist-get state :cont)
+          (if (string-match "^*** Exception" reply)
+              (list)
+            (mapcar
+             (lambda (x)
+               (intero-parse-candidate 
+                (replace-regexp-in-string "\\\"" "" x)))
+             (split-string reply "\n" t)))))))))
+
+(defun intero-parse-candidate (str)
+  (if intero-show-annotation
+      (progn
+        (string-match "\\(.*\\) :: \\(.*\\)" str)
+        (propertize (match-string 1 str) :type (match-string 2 str)))
+    str))
 
 (defun intero-get-repl-completions (source-buffer prefix cont)
   "Get REPL completions and send to SOURCE-BUFFER.

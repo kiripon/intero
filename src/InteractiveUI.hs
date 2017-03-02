@@ -1824,10 +1824,11 @@ completeAtType str = handleSourceError GHC.printException $ do
           result <- runExceptT $ findCompletionsWithType infos fp sample 
           case result of
             Left err -> error $ showSDocForUser df alwaysQualify err
-            Right completions' ->liftIO $ forM_ completions' $ \c ->
-              case cType c of
-                Just t -> putStrLn $ cId c ++ " :: " ++ t
-                Nothing -> putStrLn $ cId c
+            Right completions' ->liftIO $ forM_ completions' $ \c -> do
+              let typeStr = fromMaybe "" ((" :: " ++) <$> cType c)
+                  modStr  = fromMaybe "" ((++ " ")<$> cModule c)
+                  idStr = cId c
+              putStrLn $ modStr ++ idStr ++ typeStr
     _ -> return ()
 
 

@@ -23,6 +23,7 @@ import           DynFlags
 import Control.Monad.Trans.Class
 import Control.Monad.Trans.Except
 import Control.Monad.Trans.Maybe
+import Control.Monad
 import           ConLike
 import           GHC
 import           GhciInfo         (showppr)
@@ -70,13 +71,15 @@ findGlobalCandidates sample moduleInf = do
     toplevelNames = concat (mapMaybe modInfoTopLevelScope minfos)
     filteredToplevels = filter (isPrefixOf ident . showppr df)
                         toplevelNames
-  globalNames <- catMaybes <$> mapM (getInfo True) filteredToplevels
-  let globalNameTypes = map (\(t,_r,_,_) -> let (n,tt) = mkTyThingNameType t
-                                                n' = showppr df n
-                                                tt' = fmap (showppr df) tt
-                                            in MkCandidate n' tt' (Just qual))
-                     globalNames
-  return globalNameTypes
+  forM (take 20 filteredToplevels) $ \n -> do
+    info <- getInfo True n
+    case info of
+      Nothing -> return $ MkCandidate (showppr df n) Nothing Nothing
+      Just (t,_,_,_) -> do
+        let (nm,tt) = mkTyThingNameType t
+            nm' = showppr df nm
+            tt' = showppr df <$> tt
+        return $ MkCandidate nm' tt' (Just qual)
   where
     getModInfo qmname = findModule qmname Nothing >>= getModuleInfo
     noQual = ("", sample, [modinfoInfo moduleInf])
