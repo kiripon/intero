@@ -1,6 +1,6 @@
 {-# LANGUAGE CPP                      #-}
-{-# LANGUAGE OverloadedStrings        #-}
 {-# LANGUAGE NondecreasingIndentation #-}
+{-# LANGUAGE OverloadedStrings        #-}
 {-# LANGUAGE ScopedTypeVariables      #-}
 
 module TypeCompletion
@@ -9,35 +9,34 @@ module TypeCompletion
   ) where
 
 #if __GLASGOW_HASKELL__ >= 800
-import           Module           (mkModuleNameFS)
+import           Module                     (mkModuleNameFS)
 #endif
 
 #if __GLASGOW_HASKELL__ < 710
-import           Data.Foldable    (foldMap)
+import           Data.Foldable              (foldMap)
 #endif
+import           ConLike
+import           Control.Monad
+import           Control.Monad.Trans.Class
+import           Control.Monad.Trans.Except
+import           Control.Monad.Trans.Maybe
 import           Data.List
-import           Data.Map         (Map)
-import qualified Data.Map         as M
+import           Data.Map                   (Map)
+import qualified Data.Map                   as M
 import           Data.Maybe
 import           DynFlags
-import Control.Monad.Trans.Class
-import Control.Monad.Trans.Except
-import Control.Monad.Trans.Maybe
-import Control.Monad
-import           ConLike
 import           GHC
-import           GhciInfo         (showppr)
+import           GhciInfo                   (showppr)
 import           GhciTypes
 import           GhcMonad
+import           Outputable
 import           System.Directory
 import           Var
-import Outputable
 data Candidate = MkCandidate
   { cId     :: String
   , cType   :: Maybe String
   , cModule :: Maybe String
   } deriving (Show,Eq)
-
 
 findCompletionsWithType :: (GhcMonad m)
                 => Map ModuleName ModInfo
@@ -60,10 +59,9 @@ findGlobalCandidates :: GhcMonad m
 findGlobalCandidates sample moduleInf = do
   df <- getDynFlags
   (qual, ident, minfos) <- splitQualIdentInfo
-  let
-    toplevelNames = concat (mapMaybe modInfoTopLevelScope minfos)
-    filteredToplevels = filter (isPrefixOf ident . showppr df)
-                        toplevelNames
+  let toplevelNames     = concat (mapMaybe modInfoTopLevelScope minfos)
+      filteredToplevels = filter (isPrefixOf ident . showppr df)
+                          toplevelNames
   forM (take 20 filteredToplevels) $ \n -> do
     info <- lookupName n
     case info of
