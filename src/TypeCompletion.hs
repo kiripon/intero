@@ -76,7 +76,7 @@ findGlobalCandidates sample moduleInf = do
     getTyThingType :: TyThing -> Maybe Type
     getTyThingType x = case x of
       AnId i                    -> Just (snd . splitForAllTys $ varType i)
-      AConLike (RealDataCon dc) -> Just (dataConType dc)
+      AConLike (RealDataCon dc) -> Just (snd . splitForAllTys $ dataConType dc)
       AConLike (PatSynCon _psc) -> Nothing
       ATyCon tc                 -> Just (tyConKind tc)
       ACoAxiom _coax            -> Nothing
