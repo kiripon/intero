@@ -38,13 +38,6 @@ data Candidate = MkCandidate
   , cModule :: Maybe String
   } deriving (Show,Eq)
 
-mkTyThingNameType :: TyThing -> (Name,Maybe Type)
-mkTyThingNameType x = case x of
-  AnId i -> (getName i, Just $ snd . splitForAllTys $ varType i)
-  AConLike (RealDataCon dc) -> (getName dc,Just $ dataConType dc)
-  AConLike (PatSynCon psc) -> (getName psc,Nothing)
-  ATyCon tc -> (getName tc, Just $ tyConKind tc)
-  ACoAxiom _coax -> (getName _coax, Nothing)
 
 findCompletionsWithType :: (GhcMonad m)
                 => Map ModuleName ModInfo
@@ -72,17 +65,24 @@ findGlobalCandidates sample moduleInf = do
     filteredToplevels = filter (isPrefixOf ident . showppr df)
                         toplevelNames
   forM (take 20 filteredToplevels) $ \n -> do
-    info <- getInfo True n
+    info <- lookupName n
     case info of
-      Nothing -> return $ MkCandidate (showppr df n) Nothing Nothing
-      Just (t,_,_,_) -> do
-        let (nm,tt) = mkTyThingNameType t
-            nm' = showppr df nm
-            tt' = showppr df <$> tt
-        return $ MkCandidate nm' tt' (Just qual)
+      Nothing      -> return $ MkCandidate (showppr df n) Nothing Nothing
+      Just tyThing -> do
+        let nm' = showppr df  $  getName tyThing
+            tt' = showppr df <$> getTyThingType tyThing
+        return $ MkCandidate nm' tt' qual
   where
+    getTyThingType :: TyThing -> Maybe Type
+    getTyThingType x = case x of
+      AnId i                    -> Just (snd . splitForAllTys $ varType i)
+      AConLike (RealDataCon dc) -> Just (dataConType dc)
+      AConLike (PatSynCon _psc) -> Nothing
+      ATyCon tc                 -> Just (tyConKind tc)
+      ACoAxiom _coax            -> Nothing
+
     getModInfo qmname = findModule qmname Nothing >>= getModuleInfo
-    noQual = ("", sample, [modinfoInfo moduleInf])
+    noQual = (Nothing, sample, [modinfoInfo moduleInf])
     qualSrc = findQualifiedSource
               (map unLoc (modinfoImports moduleInf))
               sample
@@ -92,7 +92,7 @@ findGlobalCandidates sample moduleInf = do
           minfos <- catMaybes <$> mapM getModInfo qualModNames
           if null minfos
             then return noQual
-            else return (qual, ident, minfos)
+            else return (Just qual, ident, minfos)
       | otherwise = return noQual
 
 -- | Guess a module name from a file path.

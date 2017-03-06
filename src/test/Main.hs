@@ -407,6 +407,44 @@ completion = do
              (2, 5, 0, 0, "loc")
              lines
              ["locally"]))
+  describe
+    "Completion in module context (with Type Annotation)"
+    (do it
+          ":complete-at-type for put*"
+          (atFile
+             ":complete-at-type"
+             "X.hs"
+             "module X () where\nx = undefined"
+             (4, 5, 0, 0, "put")
+             lines
+             ["putChar :: Char -> IO ()", "putStr :: String -> IO ()", "putStrLn :: String -> IO ()"])
+        it
+          ":complete-at-type for locally imported"
+          (atFile
+             ":complete-at-type"
+             "X.hs"
+             "module X () where\nimport Data.List\nx = undefined"
+             (3, 5, 0, 0, "sor")
+             (take 2 . lines)
+             ["sort :: Ord a => [a] -> [a]", "sortBy :: (a -> a -> Ordering) -> [a] -> [a]"])
+        it
+          ":complete-at-type for module-locally defined"
+          (atFile
+             ":complete-at-type"
+             "X.hs"
+             "module X () where\nx = undefined\nmodlocal = ()"
+             (2, 5, 0, 0, "modl")
+             lines
+             ["modlocal :: ()"])
+        it
+          ":complete-at-type for definition-locally defined"
+          (atFile
+             ":complete-at-type"
+             "X.hs"
+             "module X () where\nx = undefined where locally = let p = 123 in p"
+             (2, 5, 0, 0, "loc")
+             lines
+             ["locally :: Integer"]))
 
 --------------------------------------------------------------------------------
 -- Combinators for running and interacting with intero
