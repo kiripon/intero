@@ -117,8 +117,10 @@ import qualified Network
 import Network.BSD
 import           Control.Applicative hiding (empty)
 import           Control.Monad as Monad
-import           Control.Monad.Trans.Class
 import           Control.Monad.IO.Class
+import           Control.Monad.Trans.Class
+import           Control.Monad.Trans.Except
+import           Control.Monad.Trans.Maybe
 import           Control.Concurrent (threadDelay, forkIO)
 #if MIN_VERSION_directory(1,2,3)
 import           Data.Time (getCurrentTime)
@@ -309,7 +311,7 @@ fillCmd h =
   withFillInput
     (\fp line col -> do
        infos <- fmap mod_infos getGHCiState
-       mname <- guessModule infos fp
+       mname <- runMaybeT $ guessModule infos fp
        case mname of
          Nothing ->
            liftIO (hPutStrLn h "Couldn't guess that module name. Does it exist?")
@@ -1975,7 +1977,7 @@ findAllUses h str =
     Left err -> liftIO (hPutStrLn h err)
     Right (fp,sl,sc,el,ec,sample) ->
       do infos <- fmap mod_infos getGHCiState
-         result <- findNameUses infos fp sample sl sc el ec
+         result <- runExceptT $ findNameUses infos fp sample sl sc el ec
          case result of
            Left err -> liftIO (hPutStrLn h  err)
            Right uses ->
@@ -2043,7 +2045,7 @@ locationAt h str =
     Left err -> liftIO (hPutStrLn h  err)
     Right (fp,sl,sc,el,ec,sample) ->
       do infos <- fmap mod_infos getGHCiState
-         result <- findLoc infos fp sample sl sc el ec
+         result <- runExceptT $ findLoc infos fp sample sl sc el ec
          case result of
            Left err -> liftIO (hPutStrLn h  err)
            Right sp ->
@@ -2070,7 +2072,7 @@ completeAt h str =
     Left err -> liftIO (hPutStrLn h  err)
     Right (fp,sl,sc,el,ec,sample) | not (null str) ->
       do infos <- fmap mod_infos getGHCiState
-         result <- findCompletions infos fp sample sl sc el ec
+         result <- runExceptT $ findCompletions infos fp sample sl sc el ec
          case result of
            Left err -> error err
            Right completions' ->
