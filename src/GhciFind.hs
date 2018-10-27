@@ -277,40 +277,24 @@ resolveNameFromModule :: GhcMonad m
                       => Map ModuleName ModInfo
                       -> Name
                       -> ExceptT String m Name
-resolveNameFromModule infos name = ExceptT $
-  do d <- getSessionDynFlags
-     case nameModule_maybe name of
-       Nothing ->
-         return (Left ("No module for " ++
-                       showppr d name))
-       Just modL ->
-         do case M.lookup (moduleName modL) infos of
-              Nothing ->
+resolveNameFromModule infos name =
+  do d <- lift $ getSessionDynFlags
+     modL <- maybe (throwE $ "No module for " ++ showppr d name) return $
+             nameModule_maybe name
 #if __GLASGOW_HASKELL__ >= 800
-                do (return (Left (unitIdString (moduleUnitId modL) ++ ":" ++
+     info <- maybe (throwE $ unitIdString (moduleUnitId modL) ++ ":" ++ showppr d modL) return $
+             M.lookup (moduleName modL) infos
 #elif __GLASGOW_HASKELL__ >= 709
-                do (return (Left (showppr d (modulePackageKey modL) ++ ":" ++
+     info <- maybe (throwE $ showppr d (modulePackageKey modL) ++ ":" ++ showppr d modL) return $
+             M.lookup (moduleName modL) infos
 #else
-                do (return (Left (showppr d (modulePackageId modL) ++ ":" ++
+     info <- maybe (throwE $ showppr d (modulePackageId modL) ++ ":" ++ showppr d modL) return $
+             M.lookup (moduleName modL) infos
 #endif
-                                  showppr d modL)))
-              Just info ->
-                case find (reliableNameEquality name)
-                          (modInfoExports (modinfoInfo info)) of
-                  Just name' ->
-                    return (Right name')
-                  Nothing ->
-                    case find (reliableNameEquality name)
-                              (fromMaybe [] (modInfoTopLevelScope (modinfoInfo info))) of
-                      Just name' ->
-                        return (Right name')
-                      Nothing -> do
-                        result <- lookupGlobalName name
-                        case result of
-                          Nothing ->
-                            return (Left ("No matching export in any local modules: " ++ showppr d name))
-                          Just tyThing ->
-                            return (Right (getName tyThing))
+     maybeToExceptT ("No matching export in any local modules: " ++ showppr d name) $
+             (MaybeT $ return $ find (reliableNameEquality name) (modInfoExports (modinfoInfo info)))
+         <|> (MaybeT $ return $ find (reliableNameEquality name) (fromMaybe [] (modInfoTopLevelScope (modinfoInfo info))))
+         <|> getName <$> (MaybeT $ lookupGlobalName name)
 
 -- | Try to resolve the type display from the given span.
 resolveName :: [SpanInfo] -> Int -> Int -> Int -> Int -> Maybe Var
