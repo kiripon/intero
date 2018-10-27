@@ -321,8 +321,7 @@ resolveName spans' sl sc el ec =
           ((el' == el && ec' <= ec) || (el' < el))
 
 data FindType
-  = FindTypeFail String
-  | FindType ModInfo
+  = FindType ModInfo
              Type
   | FindTyThing ModInfo
                 TyThing
@@ -336,44 +335,41 @@ findType :: GhcMonad m
          -> Int
          -> Int
          -> Int
-         -> m FindType
+         -> ExceptT String m FindType
 findType infos fp string sl sc el ec =
-  do mname <- runMaybeT $ guessModule infos fp
-     case mname of
-       Nothing ->
-         return (FindTypeFail "Couldn't guess that module name. Does it exist?")
-       Just modName ->
-         case M.lookup modName infos of
-           Nothing ->
-             return (FindTypeFail "Couldn't guess the module name. Is this module loaded?")
-           Just minfo ->
-             do names <- lookupNamesInContext string
-                let !mspaninfo =
-                      resolveSpanInfo (modinfoSpans minfo)
-                                      sl
-                                      sc
-                                      el
-                                      ec
-                case mspaninfo of
-                  Just si
-                    | Just ty <- spaninfoType si ->
-                      case fmap Var.varName (spaninfoVar si) of
+  do modName <- maybeToExceptT "Couldn't guess that module name. Does it exist?" $
+                guessModule infos fp
+
+     minfo   <- maybeToExceptT "Couldn't guess the module name. Is this module loaded?" $
+                MaybeT $ return $ M.lookup modName infos
+
+     names <- lift $ lookupNamesInContext string
+     let !mspaninfo =
+           resolveSpanInfo (modinfoSpans minfo)
+                           sl
+                           sc
+                           el
+                           ec
+     case mspaninfo of
+       Just si
+         | Just ty <- spaninfoType si ->
+           case fmap Var.varName (spaninfoVar si) of
+             Nothing -> return (FindType minfo ty)
+             Just name ->
+               case find (reliableNameEquality name) names of
+                 Just nameWithBetterType ->
+                   do result <- lift $ ghc_getInfo True nameWithBetterType
+                      case result of
+                        Just (thing,_,_,_) ->
+                          return (FindTyThing minfo thing)
                         Nothing -> return (FindType minfo ty)
-                        Just name ->
-                          case find (reliableNameEquality name) names of
-                            Just nameWithBetterType ->
-                              do result <- ghc_getInfo True nameWithBetterType
-                                 case result of
-                                   Just (thing,_,_,_) ->
-                                     return (FindTyThing minfo thing)
-                                   Nothing -> return (FindType minfo ty)
-                            Nothing -> return (FindType minfo ty)
-                  _ ->
-                    fmap (FindType minfo)
+                 Nothing -> return (FindType minfo ty)
+       _ ->
+         fmap (FindType minfo)
 #if __GLASGOW_HASKELL__ >= 802
-                         (exprType TM_Inst string)
+                  (lift $ exprType TM_Inst string)
 #else
-                         (exprType string)
+                  (lift $ exprType string)
 #endif
 
 -- | Try to resolve the type display from the given span.

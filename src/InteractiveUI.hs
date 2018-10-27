@@ -1956,14 +1956,14 @@ typeAt h str =
        Left err -> liftIO (hPutStrLn h err)
        Right (fp,sl,sc,el,ec,sample) ->
          do infos <- fmap mod_infos getGHCiState
-            result <- findType infos fp sample sl sc el ec
+            result <- runExceptT $ findType infos fp sample sl sc el ec
             case result of
-              FindTypeFail err -> liftIO (hPutStrLn h err)
-              FindType info' ty ->
+              Left err -> liftIO (hPutStrLn h err)
+              Right (FindType info' ty) ->
                 printForUserModInfo h
                   (modinfoInfo info')
                   (sep [text sample,nest 2 (dcolon <+> ppr ty)])
-              FindTyThing info' tything ->
+              Right (FindTyThing info' tything) ->
                 printForUserModInfo h (modinfoInfo info')
                                       (pprTyThing' tything))
 
