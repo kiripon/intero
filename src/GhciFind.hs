@@ -28,6 +28,7 @@ import           GhcMonad
 import           GhciInfo (showppr)
 import           GhciTypes
 import           Name
+import           Outputable
 import           SrcLoc
 import           System.Directory
 import           Var
@@ -70,15 +71,15 @@ findCompletions :: (GhcMonad m)
                 -> Int
                 -> Int
                 -> Int
-                -> ExceptT String m [String]
+                -> ExceptT SDoc m [String]
 findCompletions infos fp sample sl sc el ec =
-  do name <- maybeToExceptT "Couldn't guess that module name. Does it exist?" $
+  do name <- maybeToExceptT (text "Couldn't guess that module name. Does it exist?") $
              guessModule infos fp
 
-     info <- maybeToExceptT "No module info for the current file! Try loading it?" $
+     info <- maybeToExceptT (text "No module info for the current file! Try loading it?") $
              MaybeT $ return $ M.lookup name infos
 
-     df <- getDynFlags
+     df <- lift getDynFlags
      (qual, ident, minfs) <-
         let noQual = ("", sample, [modinfoInfo info])
             getModInfo qmname =
@@ -136,21 +137,20 @@ findNameUses :: (GhcMonad m)
              -> Int
              -> Int
              -> Int
-             -> ExceptT String m [SrcSpan]
+             -> ExceptT SDoc m [SrcSpan]
 findNameUses infos fp string sl sc el ec =
-  do name <- maybeToExceptT "Couldn't guess that module name. Does it exist?" $
+  do name <- maybeToExceptT (text "Couldn't guess that module name. Does it exist?") $
              guessModule infos fp
 
-     info <- maybeToExceptT "No module info for the current file! Try loading it?" $
+     info <- maybeToExceptT (text "No module info for the current file! Try loading it?") $
              MaybeT $ pure $ M.lookup name infos
 
      name' <- findName infos info string sl sc el ec
      case getSrcSpan name' of
        UnhelpfulSpan{} ->
-         do d <- lift $ getSessionDynFlags
-            throwE ("Found a name, but no location information. The module is: " ++
-                          maybe "<unknown>"
-                                (showppr d . moduleName)
+         do throwE (text "Found a name, but no location information. The module is: " <>
+                          maybe (text "<unknown>")
+                                (ppr . moduleName)
                                 (nameModule_maybe name'))
        span' ->
          return (stripSurrounding
@@ -207,24 +207,23 @@ findLoc :: (GhcMonad m)
         -> Int
         -> Int
         -> Int
-        -> ExceptT String m SrcSpan
+        -> ExceptT SDoc m SrcSpan
 findLoc infos fp string sl sc el ec =
-  do name <- maybeToExceptT "Couldn't guess that module name. Does it exist?" $
+  do name <- maybeToExceptT (text "Couldn't guess that module name. Does it exist?") $
              guessModule infos fp
 
-     info <- maybeToExceptT "No module info for the current file! Try loading it?" $
+     info <- maybeToExceptT (text "No module info for the current file! Try loading it?") $
              MaybeT $ pure $ M.lookup name infos
 
      case findImportLoc infos info sl sc el ec of
        Just result -> return result
        Nothing ->
          do name' <- findName infos info string sl sc el ec
-            d <- lift $ getSessionDynFlags
             case getSrcSpan name' of
               UnhelpfulSpan{} ->
-                throwE ("Found a name, but no location information. The module is: " ++
-                              maybe "<unknown>"
-                                 (showppr d . moduleName)
+                throwE (text "Found a name, but no location information. The module is:" <+>
+                              maybe (text "<unknown>")
+                                 (ppr . moduleName)
                                  (nameModule_maybe name'))
 
               span' -> return span'
@@ -250,7 +249,7 @@ findName :: GhcMonad m
          -> Int
          -> Int
          -> Int
-         -> ExceptT String m Name
+         -> ExceptT SDoc m Name
 findName infos mi string sl sc el ec =
   case resolveName (modinfoSpans mi)
                    sl
@@ -265,7 +264,7 @@ findName infos mi string sl sc el ec =
   where tryExternalModuleResolution =
           case find (matchName string)
                     (fromMaybe [] (modInfoTopLevelScope (modinfoInfo mi))) of
-            Nothing -> throwE "Couldn't resolve to any modules."
+            Nothing -> throwE $ text "Couldn't resolve to any modules."
             Just imported -> resolveNameFromModule infos imported
         matchName :: String -> Name -> Bool
         matchName str name =
@@ -276,22 +275,13 @@ findName infos mi string sl sc el ec =
 resolveNameFromModule :: GhcMonad m
                       => Map ModuleName ModInfo
                       -> Name
-                      -> ExceptT String m Name
+                      -> ExceptT SDoc m Name
 resolveNameFromModule infos name =
-  do d <- lift $ getSessionDynFlags
-     modL <- maybe (throwE $ "No module for " ++ showppr d name) return $
+  do modL <- maybe (throwE $ text "No module for" <+> ppr name) return $
              nameModule_maybe name
-#if __GLASGOW_HASKELL__ >= 800
-     info <- maybe (throwE $ unitIdString (moduleUnitId modL) ++ ":" ++ showppr d modL) return $
+     info <- maybe (throwE $ ppr modL) return $
              M.lookup (moduleName modL) infos
-#elif __GLASGOW_HASKELL__ >= 709
-     info <- maybe (throwE $ showppr d (modulePackageKey modL) ++ ":" ++ showppr d modL) return $
-             M.lookup (moduleName modL) infos
-#else
-     info <- maybe (throwE $ showppr d (modulePackageId modL) ++ ":" ++ showppr d modL) return $
-             M.lookup (moduleName modL) infos
-#endif
-     maybeToExceptT ("No matching export in any local modules: " ++ showppr d name) $
+     maybeToExceptT (text "No matching export in any local modules:" <+> ppr name) $
              (MaybeT $ return $ find (reliableNameEquality name) (modInfoExports (modinfoInfo info)))
          <|> (MaybeT $ return $ find (reliableNameEquality name) (fromMaybe [] (modInfoTopLevelScope (modinfoInfo info))))
          <|> getName <$> (MaybeT $ lookupGlobalName name)
@@ -319,12 +309,12 @@ findType :: GhcMonad m
          -> Int
          -> Int
          -> Int
-         -> ExceptT String m FindType
+         -> ExceptT SDoc m FindType
 findType infos fp string sl sc el ec =
-  do modName <- maybeToExceptT "Couldn't guess that module name. Does it exist?" $
+  do modName <- maybeToExceptT (text "Couldn't guess that module name. Does it exist?") $
                 guessModule infos fp
 
-     minfo   <- maybeToExceptT "Couldn't guess the module name. Is this module loaded?" $
+     minfo   <- maybeToExceptT (text "Couldn't guess the module name. Is this module loaded?") $
                 MaybeT $ return $ M.lookup modName infos
 
      names <- lift $ lookupNamesInContext string

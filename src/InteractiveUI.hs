@@ -117,10 +117,10 @@ import qualified Network
 import Network.BSD
 import           Control.Applicative hiding (empty)
 import           Control.Monad as Monad
-import           Control.Monad.IO.Class
-import           Control.Monad.Trans.Class
-import           Control.Monad.Trans.Except
-import           Control.Monad.Trans.Maybe
+import           Control.Monad.IO.Class ( MonadIO, liftIO )
+import           Control.Monad.Trans.Class ( lift )
+import           Control.Monad.Trans.Maybe ( runMaybeT )
+import           Control.Monad.Trans.Except ( ExceptT(..), runExceptT )
 import           Control.Concurrent (threadDelay, forkIO)
 #if MIN_VERSION_directory(1,2,3)
 import           Data.Time (getCurrentTime)
@@ -1930,6 +1930,17 @@ modulesLoadedMsg ok mods = do
   when (verbosity dflags > 0) $
      liftIO $ putStrLn $ showSDocForUser dflags unqual msg
 
+-- -- | Run an 'ExceptT' wrapped 'GhcMonad' while handling source errors
+-- -- and printing 'throwE' strings to 'stderr'
+-- runExceptGhcMonad :: GHC.GhcMonad m => Handle -> ExceptT SDoc m () -> m ()
+-- runExceptGhcMonad h act = handleSourceError GHC.printException $
+--                         either handleErr pure =<<
+--                         runExceptT act
+--   where
+--     handleErr sdoc = do
+--         dflags <- getDynFlags
+--         liftIO . hPutStrLn h . showSDocForUser dflags alwaysQualify $ sdoc
+
 -----------------------------------------------------------------------------
 -- :type
 
@@ -1949,45 +1960,40 @@ typeOfExpr
 -- :type-at
 
 typeAt :: Handle -> String -> GHCi ()
-typeAt h str =
-  handleSourceError
-    GHC.printException
-    (case parseSpan str of
-       Left err -> liftIO (hPutStrLn h err)
-       Right (fp,sl,sc,el,ec,sample) ->
-         do infos <- fmap mod_infos getGHCiState
-            result <- runExceptT $ findType infos fp sample sl sc el ec
-            case result of
-              Left err -> liftIO (hPutStrLn h err)
-              Right (FindType info' ty) ->
-                printForUserModInfo h
-                  (modinfoInfo info')
-                  (sep [text sample,nest 2 (dcolon <+> ppr ty)])
-              Right (FindTyThing info' tything) ->
-                printForUserModInfo h (modinfoInfo info')
-                                      (pprTyThing' tything))
+typeAt h str = handleError h $ do
+    (fp,sl,sc,el,ec,sample) <- ExceptT . return $ parseSpan str
+    infos <- lift $ mod_infos <$> getGHCiState
+    result <- findType infos fp sample sl sc el ec
+    lift $ case result of
+        FindType info' ty ->
+            printForUserModInfo h (modinfoInfo info')
+                (sep [text sample,nest 2 (dcolon <+> ppr ty)])
+        FindTyThing info' tything ->
+            printForUserModInfo h (modinfoInfo info')
+                (pprTyThing' tything)
+
+handleError :: Handle -> ExceptT SDoc GHCi () -> GHCi ()
+handleError h act = handleSourceError GHC.printException $ do
+    v <- runExceptT act
+    dflags <- getDynFlags
+    case v of
+      Left x -> liftIO (hPutStrLn h (showSDocForUser dflags alwaysQualify x))
+      Right x -> return x
 
 -----------------------------------------------------------------------------
 -- :uses
 
 findAllUses :: Handle -> String -> GHCi ()
-findAllUses h str =
-  handleSourceError GHC.printException $
-  case parseSpan str of
-    Left err -> liftIO (hPutStrLn h err)
-    Right (fp,sl,sc,el,ec,sample) ->
-      do infos <- fmap mod_infos getGHCiState
-         result <- runExceptT $ findNameUses infos fp sample sl sc el ec
-         case result of
-           Left err -> liftIO (hPutStrLn h  err)
-           Right uses ->
-             forM_ uses
-                   (\sp ->
-                      case sp of
-                        RealSrcSpan rs ->
-                          liftIO (hPutStrLn h  (showSpan rs))
-                        UnhelpfulSpan fs ->
-                          liftIO (hPutStrLn h  (unpackFS fs)))
+findAllUses h str = handleError h $ do
+  (fp,sl,sc,el,ec,sample) <- ExceptT . return $ parseSpan str
+  infos <- lift $ fmap mod_infos getGHCiState
+  uses <- findNameUses infos fp sample sl sc el ec
+  forM_ uses $ \sp ->
+      case sp of
+        RealSrcSpan rs ->
+          liftIO (hPutStrLn h  (showSpan rs))
+        UnhelpfulSpan fs ->
+          liftIO (hPutStrLn h  (unpackFS fs))
   where showSpan span' =
           unpackFS (srcSpanFile span') ++
           ":(" ++
@@ -2039,21 +2045,15 @@ allTypes h _ =
 -- :loc-at
 
 locationAt :: Handle -> String -> GHCi ()
-locationAt h str =
-  handleSourceError GHC.printException $
-  case parseSpan str of
-    Left err -> liftIO (hPutStrLn h  err)
-    Right (fp,sl,sc,el,ec,sample) ->
-      do infos <- fmap mod_infos getGHCiState
-         result <- runExceptT $ findLoc infos fp sample sl sc el ec
-         case result of
-           Left err -> liftIO (hPutStrLn h  err)
-           Right sp ->
-             case sp of
-               RealSrcSpan rs ->
-                 liftIO (hPutStrLn h  (showSpan rs))
-               UnhelpfulSpan fs ->
-                 liftIO (hPutStrLn h  (unpackFS fs))
+locationAt h str = handleError h $ do
+  (fp,sl,sc,el,ec,sample) <- ExceptT . return $ parseSpan str
+  infos <- lift $ fmap mod_infos getGHCiState
+  sp <- findLoc infos fp sample sl sc el ec
+  case sp of
+    RealSrcSpan rs ->
+      liftIO (hPutStrLn h  (showSpan rs))
+    UnhelpfulSpan fs ->
+      liftIO (hPutStrLn h  (unpackFS fs))
   where showSpan span' =
           unpackFS (srcSpanFile span')  ++ ":(" ++
           show (srcSpanStartLine span')  ++ "," ++
@@ -2066,28 +2066,27 @@ locationAt h str =
 -- :complete-at
 
 completeAt :: Handle -> String -> GHCi ()
-completeAt h str =
-  handleSourceError GHC.printException $
-  case parseSpan str of
-    Left err -> liftIO (hPutStrLn h  err)
-    Right (fp,sl,sc,el,ec,sample) | not (null str) ->
-      do infos <- fmap mod_infos getGHCiState
-         result <- runExceptT $ findCompletions infos fp sample sl sc el ec
-         case result of
-           Left err -> error err
-           Right completions' ->
-             liftIO (mapM_ (hPutStrLn h ) completions')
-    _ -> return ()
+completeAt h str = handleError h $ do
+  (fp,sl,sc,el,ec,sample) <- ExceptT . return $ parseSpan str
+  if not (null str)
+    then do
+      infos <- lift $ fmap mod_infos getGHCiState
+      completions' <- findCompletions infos fp sample sl sc el ec
+      -- case result of
+      -- Left err -> error err
+      liftIO (mapM_ (hPutStrLn h ) completions')
+    else
+      return ()
 
 -----------------------------------------------------------------------------
 -- Helpers for locationAt/typeAt
 
 -- | Parse a span: <module-name/filepath> <sl> <sc> <el> <ec> <string>
-parseSpan :: String -> Either String (FilePath,Int,Int,Int,Int,String)
+parseSpan :: String -> Either SDoc (FilePath,Int,Int,Int,Int,String)
 parseSpan str =
   case result of
     Left {} ->
-      Left "\n<no location info>: Expected a span: \"<module-name/filepath>\" <start line> <start column> <end line> <end column> \"<sample string>\"\n"
+      Left (text "\n<no location info>: Expected a span: \"<module-name/filepath>\" <start line> <start column> <end line> <end column> \"<sample string>\"\n")
     Right r -> Right r
   where result =
           case getString str of
@@ -2108,7 +2107,7 @@ parseSpan str =
         extractInt s' =
           case span (/= ' ') (dropWhile1 (== ' ') s') of
             (reads -> [(i,_)],s'') -> Right (i,dropWhile1 (== ' ') s'')
-            _ -> Left ("Expected integer in " ++ s')
+            _ -> Left (text "Expected integer in " <> text s')
           where dropWhile1 _ [] = []
                 dropWhile1 p xs@(x:xs')
                   | p x = xs'
@@ -2268,9 +2267,9 @@ dynFlagsEnabledExtensions df =
   ]
   where
     downcase = map toLower
-    showExtension e =
-      if isPrefixOf "Opt_" (show e)
-        then drop (length "Opt_") (show e)
+    showExtension e = let opt = "Opt_" in
+      if isPrefixOf opt (show e)
+        then drop (length opt) (show e)
         else show e
 
 -----------------------------------------------------------------------------
@@ -2975,7 +2974,7 @@ showImports = do
         | any isPreludeImport (rem_ctx ++ trans_ctx) = []
         | not (xopt compat_ImplicitPrelude dflags)      = []
         | otherwise = ["import Prelude -- implicit"]
-
+      trans_comment :: String -> String
       trans_comment s = s ++ " -- added automatically"
   --
   liftIO $ mapM_ putStrLn (prel_imp ++ map show_one rem_ctx
