@@ -1,4 +1,5 @@
 {-# LANGUAGE ScopedTypeVariables #-}
+
 {-# LANGUAGE NondecreasingIndentation #-}
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE MagicHash #-}
@@ -119,7 +120,9 @@ import           Control.Applicative hiding (empty)
 import           Control.Monad as Monad
 import           Control.Monad.IO.Class ( MonadIO, liftIO )
 import           Control.Monad.Trans.Class ( lift )
+#if __GLASGOW_HASKELL__ >= 802
 import           Control.Monad.Trans.Maybe ( runMaybeT )
+#endif
 import           Control.Monad.Trans.Except ( ExceptT(..), runExceptT )
 import           Control.Concurrent (threadDelay, forkIO)
 #if MIN_VERSION_directory(1,2,3)
