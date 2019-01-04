@@ -1964,9 +1964,9 @@ typeOfExpr
 
 typeAt :: Handle -> String -> GHCi ()
 typeAt h str = handleError h $ do
-    (fp,sl,sc,el,ec,sample) <- ExceptT . return $ parseSpan str
+    (span0, sample) <- ExceptT . return $ parseSpan str
     infos <- lift $ mod_infos <$> getGHCiState
-    result <- findType infos fp sample sl sc el ec
+    result <- findType infos span0 sample
     lift $ case result of
         FindType info' ty ->
             printForUserModInfo h (modinfoInfo info')
@@ -1988,9 +1988,9 @@ handleError h act = handleSourceError GHC.printException $ do
 
 findAllUses :: Handle -> String -> GHCi ()
 findAllUses h str = handleError h $ do
-  (fp,sl,sc,el,ec,sample) <- ExceptT . return $ parseSpan str
+  (span0, sample) <- ExceptT . return $ parseSpan str
   infos <- lift $ fmap mod_infos getGHCiState
-  uses <- findNameUses infos fp sample sl sc el ec
+  uses <- findNameUses infos span0 sample
   forM_ uses $ \sp ->
       case sp of
         RealSrcSpan rs ->
@@ -2049,9 +2049,9 @@ allTypes h _ =
 
 locationAt :: Handle -> String -> GHCi ()
 locationAt h str = handleError h $ do
-  (fp,sl,sc,el,ec,sample) <- ExceptT . return $ parseSpan str
+  (span0, sample) <- ExceptT . return $ parseSpan str
   infos <- lift $ fmap mod_infos getGHCiState
-  sp <- findLoc infos fp sample sl sc el ec
+  sp <- findLoc infos span0 sample
   case sp of
     RealSrcSpan rs ->
       liftIO (hPutStrLn h  (showSpan rs))
@@ -2070,11 +2070,11 @@ locationAt h str = handleError h $ do
 
 completeAt :: Handle -> String -> GHCi ()
 completeAt h str = handleError h $ do
-  (fp,sl,sc,el,ec,sample) <- ExceptT . return $ parseSpan str
+  (span0, sample) <- ExceptT . return $ parseSpan str
   if not (null str)
     then do
       infos <- lift $ fmap mod_infos getGHCiState
-      completions' <- findCompletions infos fp sample sl sc el ec
+      completions' <- findCompletions infos span0 sample
       -- case result of
       -- Left err -> error err
       liftIO (mapM_ (hPutStrLn h ) completions')
@@ -2085,29 +2085,31 @@ completeAt h str = handleError h $ do
 -- Helpers for locationAt/typeAt
 
 -- | Parse a span: <module-name/filepath> <sl> <sc> <el> <ec> <string>
-parseSpan :: String -> Either SDoc (FilePath,Int,Int,Int,Int,String)
+parseSpan :: String -> Either SDoc (RealSrcSpan, String)
 parseSpan str =
   case result of
     Left {} ->
       Left (text "\n<no location info>: Expected a span: \"<module-name/filepath>\" <start line> <start column> <end line> <end column> \"<sample string>\"\n")
     Right r -> Right r
-  where result =
-          case getString str of
-            (fp,s') ->
-              do (sl,s1) <- extractInt s'
+  where
+    result = case getString str of
+            (fp,s') -> do
+                 (sl,s1) <- extractInt s'
                  (sc,s2) <- extractInt s1
                  (el,s3) <- extractInt s2
                  (ec,st) <- extractInt s3
                  -- GHC exposes a 1-based column number because reasons.
-                 Right (fp,sl,sc - 1,el,ec - 1,maybeStr st)
-        maybeStr s = case reads s of
+                 let fs = mkFastString fp
+                     span' = mkRealSrcSpan (mkRealSrcLoc fs sl (sc - 1)) (mkRealSrcLoc fs el (ec - 1))
+                 return (span', maybeStr st)
+    maybeStr s = case reads s of
                        [(s',"")] -> s'
                        _ -> s
-        getString s =
+    getString s =
           case reads s of
             [(s',rest)] -> (s',rest)
             _ -> span (/= ' ') s
-        extractInt s' =
+    extractInt s' =
           case span (/= ' ') (dropWhile1 (== ' ') s') of
             (reads -> [(i,_)],s'') -> Right (i,dropWhile1 (== ' ') s'')
             _ -> Left (text "Expected integer in " <> text s')

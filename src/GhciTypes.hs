@@ -5,7 +5,6 @@ module GhciTypes where
 import Data.Time
 import GHC
 import Intero.Compat
-import Outputable
 
 -- | Info about a module. This information is generated every time a
 -- module is loaded.
@@ -47,17 +46,3 @@ data SpanInfo =
             -- information about the identifier such as module,
             -- locality, definition location, etc.
            }
-
-instance Outputable SpanInfo where
-  ppr (SpanInfo sl sc el ec ty v) =
-    (int sl Outputable.<>
-     text ":" Outputable.<>
-     int sc Outputable.<>
-     text "-") Outputable.<>
-    (int el Outputable.<>
-     text ":" Outputable.<>
-     int ec Outputable.<>
-     text ": ") Outputable.<>
-    (ppr v Outputable.<>
-     text " :: " Outputable.<>
-     ppr ty)

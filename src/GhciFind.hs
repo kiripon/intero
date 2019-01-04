@@ -6,7 +6,7 @@
 -- | Find type/location information.
 
 module GhciFind
-  (findType,FindType(..),findLoc,findNameUses,findCompletions,guessModule)
+  (findType,FindType(..),findLoc,findNameUses,findCompletions,guessModule, MyRealSrcSpan(..))
   where
 
 import           Intero.Compat
@@ -61,20 +61,16 @@ findQualifiedSource importDecls sample =
 #else
                 asName = fmap moduleNameString . ideclAs
 #endif
-
+data MyRealSrcSpan = MyRealSrcSpan FilePath Int Int Int Int
 -- | Find completions for the sample, context given by the location.
 findCompletions :: (GhcMonad m)
                 => Map ModuleName ModInfo
-                -> FilePath
+                -> RealSrcSpan
                 -> String
-                -> Int
-                -> Int
-                -> Int
-                -> Int
                 -> ExceptT SDoc m [String]
-findCompletions infos fp sample sl sc el ec =
+findCompletions infos span0 sample =
   do name <- maybeToExceptT (text "Couldn't guess that module name. Does it exist?") $
-             guessModule infos fp
+             guessModule infos (srcSpanFilePath span0)
 
      info <- maybeToExceptT (text "No module info for the current file! Try loading it?") $
              MaybeT $ return $ M.lookup name infos
@@ -102,7 +98,7 @@ findCompletions infos fp sample sl sc el ec =
                (filter (isPrefixOf ident)
                        (map (showppr df) toplevelNames))
      localNames <- lift $ findLocalizedCompletions (modinfoSpans info)
-                                            sample sl sc el ec
+                                            sample span0
      return (take 30 (nub (localNames ++ filteredToplevels)))
 
 -- | Find completions within the local scope of a definition of a
@@ -111,12 +107,9 @@ findLocalizedCompletions
   :: GhcMonad m
   => [SpanInfo]
   -> String
-  -> Int
-  -> Int
-  -> Int
-  -> Int
+  -> RealSrcSpan
   -> m [String]
-findLocalizedCompletions spans' prefix _sl _sc _el _ec =
+findLocalizedCompletions spans' prefix _span =
   do df <- getDynFlags
      return (mapMaybe (complete df) spans')
   where complete
@@ -131,21 +124,17 @@ findLocalizedCompletions spans' prefix _sl _sc _el _ec =
 -- | Find any uses of the given identifier in the codebase.
 findNameUses :: (GhcMonad m)
              => Map ModuleName ModInfo
-             -> FilePath
+             -> RealSrcSpan
              -> String
-             -> Int
-             -> Int
-             -> Int
-             -> Int
              -> ExceptT SDoc m [SrcSpan]
-findNameUses infos fp string sl sc el ec =
+findNameUses infos span0 string =
   do name <- maybeToExceptT (text "Couldn't guess that module name. Does it exist?") $
-             guessModule infos fp
+             guessModule infos (srcSpanFilePath span0)
 
      info <- maybeToExceptT (text "No module info for the current file! Try loading it?") $
              MaybeT $ pure $ M.lookup name infos
 
-     name' <- findName infos info string sl sc el ec
+     name' <- findName infos info string span0
      case getSrcSpan name' of
        UnhelpfulSpan{} ->
          do throwE (text "Found a name, but no location information. The module is: " <>
@@ -164,10 +153,10 @@ findNameUses infos fp string sl sc el ec =
   where makeSrcSpan (SpanInfo sl' sc' el' ec' _ _) =
           RealSrcSpan
             (mkRealSrcSpan
-               (mkRealSrcLoc (mkFastString fp)
+               (mkRealSrcLoc (mkFastString $ srcSpanFilePath span0)
                              sl'
                              (1 + sc'))
-               (mkRealSrcLoc (mkFastString fp)
+               (mkRealSrcLoc (mkFastString $ srcSpanFilePath span0)
                              el'
                              (1 + ec')))
 
@@ -201,24 +190,20 @@ overlaps y x =
 -- position in the module.
 findLoc :: (GhcMonad m)
         => Map ModuleName ModInfo
-        -> FilePath
+        -> RealSrcSpan
         -> String
-        -> Int
-        -> Int
-        -> Int
-        -> Int
         -> ExceptT SDoc m SrcSpan
-findLoc infos fp string sl sc el ec =
+findLoc infos span0 string =
   do name <- maybeToExceptT (text "Couldn't guess that module name. Does it exist?") $
-             guessModule infos fp
+             guessModule infos (srcSpanFilePath span0)
 
      info <- maybeToExceptT (text "No module info for the current file! Try loading it?") $
              MaybeT $ pure $ M.lookup name infos
 
-     case findImportLoc infos info sl sc el ec of
+     case findImportLoc infos info span0 of
        Just result -> return result
        Nothing ->
-         do name' <- findName infos info string sl sc el ec
+         do name' <- findName infos info string span0
             case getSrcSpan name' of
               UnhelpfulSpan{} ->
                 throwE (text "Found a name, but no location information. The module is:" <+>
@@ -228,16 +213,16 @@ findLoc infos fp string sl sc el ec =
 
               span' -> return span'
 
-findImportLoc :: (Map ModuleName ModInfo) -> ModInfo -> Int -> Int -> Int -> Int -> Maybe SrcSpan
-findImportLoc infos info sl sc el ec =
-  do importedModuleName <- getModuleImportedAt info sl sc el ec
+findImportLoc :: (Map ModuleName ModInfo) -> ModInfo -> RealSrcSpan -> Maybe SrcSpan
+findImportLoc infos info span0 =
+  do importedModuleName <- getModuleImportedAt info span0
      importedModInfo <- M.lookup importedModuleName infos
      return (modinfoLocation importedModInfo)
 
-getModuleImportedAt :: ModInfo -> Int -> Int -> Int -> Int -> Maybe ModuleName
-getModuleImportedAt info sl sc el ec = fmap (unLoc . ideclName . unLoc) importDeclarationMaybe
+getModuleImportedAt :: ModInfo -> RealSrcSpan -> Maybe ModuleName
+getModuleImportedAt info span0 = fmap (unLoc . ideclName . unLoc) importDeclarationMaybe
   where importDeclarationMaybe = listToMaybe $ filter isWithinRange (modinfoImports info)
-        isWithinRange importDecl = containsSrcSpan sl sc el ec (getLoc $ ideclName $ unLoc importDecl)
+        isWithinRange importDecl = containsSrcSpan span0 (getLoc $ ideclName $ unLoc importDecl)
 
 -- | Try to resolve the name located at the given position, or
 -- otherwise resolve based on the current module's scope.
@@ -245,17 +230,10 @@ findName :: GhcMonad m
          => Map ModuleName ModInfo
          -> ModInfo
          -> String
-         -> Int
-         -> Int
-         -> Int
-         -> Int
+         -> RealSrcSpan
          -> ExceptT SDoc m Name
-findName infos mi string sl sc el ec =
-  case resolveName (modinfoSpans mi)
-                   sl
-                   sc
-                   el
-                   ec of
+findName infos mi string span0 =
+  case resolveName (modinfoSpans mi) span0 of
     Nothing -> tryExternalModuleResolution
     Just name ->
       case getSrcSpan name of
@@ -287,10 +265,15 @@ resolveNameFromModule infos name =
          <|> getName <$> (MaybeT $ lookupGlobalName name)
 
 -- | Try to resolve the type display from the given span.
-resolveName :: [SpanInfo] -> Int -> Int -> Int -> Int -> Maybe Var
-resolveName spans' sl sc el ec =
+resolveName :: [SpanInfo] -> RealSrcSpan -> Maybe Var
+resolveName spans' span0 =
   listToMaybe (mapMaybe spaninfoVar (filter inside (reverse spans')))
-  where inside (SpanInfo sl' sc' el' ec' _ _) =
+  where
+    sl = srcSpanStartLine span0
+    sc = srcSpanStartCol span0
+    el = srcSpanEndLine span0
+    ec = srcSpanEndCol span0
+    inside (SpanInfo sl' sc' el' ec' _ _) =
           ((sl' == sl && sc' >= sc) || (sl' > sl)) &&
           ((el' == el && ec' <= ec) || (el' < el))
 
@@ -303,27 +286,18 @@ data FindType
 -- | Try to find the type of the given span.
 findType :: GhcMonad m
          => Map ModuleName ModInfo
-         -> FilePath
+         -> RealSrcSpan
          -> String
-         -> Int
-         -> Int
-         -> Int
-         -> Int
          -> ExceptT SDoc m FindType
-findType infos fp string sl sc el ec =
+findType infos span0 string =
   do modName <- maybeToExceptT (text "Couldn't guess that module name. Does it exist?") $
-                guessModule infos fp
+                guessModule infos (srcSpanFilePath span0)
 
      minfo   <- maybeToExceptT (text "Couldn't guess the module name. Is this module loaded?") $
                 MaybeT $ return $ M.lookup modName infos
 
      names <- lift $ lookupNamesInContext string
-     let !mspaninfo =
-           resolveSpanInfo (modinfoSpans minfo)
-                           sl
-                           sc
-                           el
-                           ec
+     let !mspaninfo = resolveSpanInfo (modinfoSpans minfo) span0
      case mspaninfo of
        Just si
          | Just ty <- spaninfoType si ->
@@ -347,11 +321,15 @@ findType infos fp string sl sc el ec =
 #endif
 
 -- | Try to resolve the type display from the given span.
-resolveSpanInfo :: [SpanInfo] -> Int -> Int -> Int -> Int -> Maybe SpanInfo
-resolveSpanInfo spanList spanSL spanSC spanEL spanEC =
-  listToMaybe
-    (sortBy (flip compareSpanInfoStart)
-            (filter (containsSpanInfo spanSL spanSC spanEL spanEC) spanList))
+resolveSpanInfo :: [SpanInfo] -> RealSrcSpan -> Maybe SpanInfo
+resolveSpanInfo spanList span0 =
+    let spanSL = srcSpanStartLine span0
+        spanSC = srcSpanStartCol span0
+        spanEL = srcSpanEndLine span0
+        spanEC = srcSpanEndCol span0
+    in listToMaybe
+       (sortBy (flip compareSpanInfoStart)
+        (filter (containsSpanInfo spanSL spanSC spanEL spanEC) spanList))
 
 -- | Compare the start of two span infos.
 compareSpanInfoStart :: SpanInfo -> SpanInfo -> Ordering
@@ -365,10 +343,14 @@ containsSpanInfo :: Int -> Int -> Int -> Int -> SpanInfo -> Bool
 containsSpanInfo spanSL spanSC spanEL spanEC (SpanInfo ancestorSL ancestorSC ancestorEL ancestorEC _ _) =
   contains spanSL spanSC spanEL spanEC ancestorSL ancestorSC ancestorEL ancestorEC
 
-containsSrcSpan :: Int -> Int -> Int -> Int -> SrcSpan -> Bool
-containsSrcSpan spanSL spanSC spanEL spanEC (RealSrcSpan spn) =
-  contains spanSL spanSC spanEL spanEC (srcSpanStartLine spn) (srcSpanStartCol spn - 1) (srcSpanEndLine spn) (srcSpanEndCol spn - 1)
-containsSrcSpan _ _ _ _ _ = False
+containsSrcSpan :: RealSrcSpan -> SrcSpan -> Bool
+containsSrcSpan span0 (RealSrcSpan spn) =
+  let spanSL = srcSpanStartLine span0
+      spanSC = srcSpanStartCol span0
+      spanEL = srcSpanEndLine span0
+      spanEC = srcSpanEndCol span0
+  in contains spanSL spanSC spanEL spanEC (srcSpanStartLine spn) (srcSpanStartCol spn - 1) (srcSpanEndLine spn) (srcSpanEndCol spn - 1)
+containsSrcSpan _ _ = False
 
 contains :: Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Bool
 contains spanSL spanSC spanEL spanEC ancestorSL ancestorSC ancestorEL ancestorEC =
@@ -400,3 +382,7 @@ lookupNamesInContext :: GhcMonad m => String -> m [Name]
 lookupNamesInContext string =
   gcatch (GHC.parseName string)
          (\(_ :: SomeException) -> return [])
+
+-- | Convenience wrapper around 'srcSpanFile' which results in a 'FilePath'
+srcSpanFilePath :: RealSrcSpan -> FilePath
+srcSpanFilePath = unpackFS . srcSpanFile
