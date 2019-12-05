@@ -258,45 +258,27 @@ ghciCommands = [
   where lifted m = \str -> lift (m stdout str)
 
 fillCmd :: Handle -> String -> GHCi ()
-fillCmd h =
-  withFillInput
-    (\fp line col -> do
-       infos <- fmap mod_infos getGHCiState
-       mname <- runExceptT 
-                $ maybeToExceptT "Couldn't guess that module name. Does it exist?"
-                $ guessModule infos fp
-       case mname of
-         Left err ->
-           liftIO (hPutStrLn h err)
-         Right name -> do
-           case M.lookup name infos of
-             Nothing ->
-               liftIO
-                 (hPutStrLn h
-                    "Couldn't guess the module name. Is this module loaded?")
-             Just module' -> do
-               completable <-
-                 Completion.getCompletableModule (modinfoSummary module')
-               case Completion.declarationByLine
-                      completable
-                      (Completion.LineNumber line) of
-                 Nothing -> liftIO (hPutStrLn h "Couldn't guess the declaration.")
-                 Just declaration -> do
-                   df <- GHC.getSessionDynFlags
-                   case find
-                          ((\rs ->
-                              srcSpanStartLine rs == line &&
-                              srcSpanStartCol rs == col) .
-                           Completion.holeRealSrcSpan)
-                          (Completion.declarationHoles df declaration) of
-                     Nothing -> pure ()
-                     Just hole -> do
-                       subs <- Completion.holeSubstitutions hole
-                       mapM_
-                         (\sub ->
-                            liftIO
-                              (hPutStrLn h (Completion.substitutionString sub)))
-                         subs)
+fillCmd h = withFillInput (\fp line col -> do
+  infos <- fmap mod_infos getGHCiState
+  declaration' <- runExceptT $ do
+       name <- guessModule infos fp
+       module' <- maybeToExceptT "Couldn't guess the module name. Is this module loaded?"
+                  $ MaybeT $ return $ M.lookup name infos
+       completable <- lift $ Completion.getCompletableModule (modinfoSummary module')
+       maybeToExceptT "Couldn't guess the declaration."
+               $ MaybeT $ return $ Completion.declarationByLine completable (Completion.LineNumber line)
+  case declaration' of
+    Left err -> liftIO (hPutStrLn h err)
+    Right declaration -> do
+      df <- GHC.getSessionDynFlags
+      let mayHole = find ((\rs -> srcSpanStartLine rs == line
+                               && srcSpanStartCol rs  == col)
+                          . Completion.holeRealSrcSpan)
+                       (Completion.declarationHoles df declaration)
+      forM_ mayHole $ \hole -> do
+        subs <- Completion.holeSubstitutions hole
+        forM_ subs $ \sub ->
+             liftIO (hPutStrLn h (Completion.substitutionString sub)))
 
 withFillInput :: (FilePath -> Int -> Int -> GHCi ()) -> String -> GHCi ()
 withFillInput cont input =

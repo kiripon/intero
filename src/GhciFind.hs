@@ -64,8 +64,7 @@ findCompletions :: (GhcMonad m)
                 -> Int
                 -> ExceptT String m [String]
 findCompletions infos fp sample sl sc el ec = do
-  name <- maybeToExceptT ("Couldn't guess that module name. Does it exist?")
-          $ guessModule infos fp
+  name <- guessModule infos fp
   moduleInf <- maybeToExceptT ("No module info for the current file! Try loading it?")
           $ MaybeT $ return $ M.lookup name infos
   let noQual = ("", sample, [modinfoInfo moduleInf])
@@ -132,8 +131,7 @@ findNameUses :: (GhcMonad m)
              -> Int
              -> ExceptT String m [SrcSpan]
 findNameUses infos fp string sl sc el ec = do
-  name <- maybeToExceptT "Couldn't guess that module name. Does it exist?"
-          $ guessModule infos fp
+  name <- guessModule infos fp
   info <- maybeToExceptT "No module info for the current file! Try loading it?"
           $ MaybeT $ return $ M.lookup name infos
   name' <- findName infos info string sl sc el ec
@@ -199,8 +197,7 @@ findLoc :: (GhcMonad m)
         -> Int
         -> ExceptT String m SrcSpan
 findLoc infos fp string sl sc el ec = do
-  name <- maybeToExceptT "Couldn't guess that module name. Does it exist?"
-          $ guessModule infos fp
+  name <- guessModule infos fp
   info <- maybeToExceptT "No module info for the current file! Try loading it?"
           $ MaybeT $ return $ M.lookup name infos
   case findImportLoc infos info sl sc el ec of
@@ -304,8 +301,7 @@ findType :: GhcMonad m
          -> Int
          -> ExceptT String m FindType
 findType infos fp string sl sc el ec = do
-  modName <- maybeToExceptT ("Couldn't guess that module name. Does it exist?")
-          $ guessModule infos fp
+  modName <- guessModule infos fp 
   minfo <- maybeToExceptT ("Couldn't guess the module name. Is this module loaded?")
           $ MaybeT $ return $ M.lookup modName infos
   names <- lift $ lookupNamesInContext string
@@ -363,26 +359,28 @@ contains spanSL spanSC spanEL spanEC ancestorSL ancestorSC ancestorEL ancestorEC
 
 -- | Guess a module name from a file path.
 guessModule :: GhcMonad m
-            => Map ModuleName ModInfo -> FilePath -> MaybeT m ModuleName
-guessModule infos fp = do
-  target <- lift $ guessTarget fp Nothing
-  case targetId target of
-    TargetModule mn  -> return mn
-    TargetFile fp' _ -> guessModule' fp'
-  where
-    findModByFp :: Monad m => FilePath -> MaybeT m ModuleName
-    findModByFp fp' = MaybeT . return $ fst <$> find ((Just fp' ==) . mifp) (M.toList infos)
+            => Map ModuleName ModInfo -> FilePath -> ExceptT String m ModuleName
+guessModule infos fp = 
+  maybeToExceptT "Couldn't guess that module name. Does it exist?" 
+  $ do
+    target <- lift $ guessTarget fp Nothing
+    case targetId target of
+      TargetModule mn  -> return mn
+      TargetFile fp' _ -> guessModule' fp'
+    where
+      findModByFp :: Monad m => FilePath -> MaybeT m ModuleName
+      findModByFp fp' = MaybeT . return $ fst <$> find ((Just fp' ==) . mifp) (M.toList infos)
 
-    mifp :: (ModuleName, ModInfo) -> Maybe FilePath
-    mifp = ml_hs_file . ms_location . modinfoSummary . snd
+      mifp :: (ModuleName, ModInfo) -> Maybe FilePath
+      mifp = ml_hs_file . ms_location . modinfoSummary . snd
 
-    guessModule' :: GhcMonad m => FilePath -> MaybeT m ModuleName
-    guessModule' fp' = findModByFp fp' <|> do
-      fp'' <- liftIO $ makeRelativeToCurrentDirectory fp'
-      target' <- lift $ guessTarget fp'' Nothing
-      case targetId target' of
-        TargetModule mn -> return mn
-        _               -> findModByFp fp''
+      guessModule' :: GhcMonad m => FilePath -> MaybeT m ModuleName
+      guessModule' fp' = findModByFp fp' <|> do
+        fp'' <- liftIO $ makeRelativeToCurrentDirectory fp'
+        target' <- lift $ guessTarget fp'' Nothing
+        case targetId target' of
+          TargetModule mn -> return mn
+          _               -> findModByFp fp''
 
 -- | Lookup the name of something in the current context.
 lookupNamesInContext :: GhcMonad m => String -> m [Name]
