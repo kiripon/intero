@@ -44,12 +44,8 @@ import DynFlags
 import HscTypes
 import SrcLoc
 import Module
-#if __GLASGOW_HASKELL__ >= 800
 import GHCi.ObjLink as ObjLink
 import GHC (BreakIndex)
-#else
-import ObjLink
-#endif
 import Linker
 
 import Exception
@@ -60,9 +56,6 @@ import Data.IORef
 import System.CPUTime
 import System.Environment
 import System.IO
-#if __GLASGOW_HASKELL__ < 709
-import Control.Applicative (Applicative(..))
-#endif
 import Control.Monad
 import GHC.Exts
 
@@ -300,7 +293,6 @@ printForUserPartWay doc = do
   liftIO $ Outputable.printForUserPartWay dflags stdout (pprUserLength dflags) unqual doc
 
 -- | Run a single Haskell expression
-#if __GLASGOW_HASKELL__ >= 802
 runStmt :: String -> GHC.SingleStep -> GHCi (Maybe GHC.ExecResult)
 runStmt expr step = do
   st <- getGHCiState
@@ -312,19 +304,6 @@ runStmt expr step = do
                                         return Nothing) $ do
           r <- GHC.execStmt expr (GHC.execOptions { GHC.execSingleStep = step })
           return (Just r)
-#else
-runStmt :: String -> GHC.SingleStep -> GHCi (Maybe GHC.RunResult)
-runStmt expr step = do
-  st <- getGHCiState
-  reifyGHCi $ \x ->
-    withProgName (progname st) $
-    withArgs (args st) $
-      reflectGHCi x $ do
-        GHC.handleSourceError (\e -> do GHC.printException e;
-                                        return Nothing) $ do
-          r <- GHC.runStmtWithLocation (progname st) (line_number st) expr step
-          return (Just r)
-#endif
 
 runDecls :: String -> GHCi [GHC.Name]
 runDecls decls = do
@@ -336,7 +315,6 @@ runDecls decls = do
         GHC.handleSourceError (\e -> do GHC.printException e; return []) $ do
           GHC.runDeclsWithLocation (progname st) (line_number st) decls
 
-#if __GLASGOW_HASKELL__ >= 802
 resume :: (SrcSpan -> Bool) -> GHC.SingleStep -> GHCi GHC.ExecResult
 resume canLogSpan step = do
   st <- getGHCiState
@@ -345,16 +323,6 @@ resume canLogSpan step = do
     withArgs (args st) $
       reflectGHCi x $ do
         GHC.resumeExec canLogSpan step
-#else
-resume :: (SrcSpan -> Bool) -> GHC.SingleStep -> GHCi GHC.RunResult
-resume canLogSpan step = do
-  st <- getGHCiState
-  reifyGHCi $ \x ->
-    withProgName (progname st) $
-    withArgs (args st) $
-      reflectGHCi x $ do
-        GHC.resume canLogSpan step
-#endif
 
 -- --------------------------------------------------------------------------
 -- timing & statistics
@@ -423,17 +391,9 @@ GLOBAL_VAR(stderr_ptr, error "no stderr_ptr", Ptr ())
 
 initInterpBuffering :: Ghc ()
 initInterpBuffering = do -- make sure these are linked
-#if __GLASGOW_HASKELL__ < 800
-    dflags <- GHC.getSessionDynFlags
-#else
     hscEnv <- getSession
-#endif
     liftIO $ do
-#if __GLASGOW_HASKELL__ >= 800
       initDynLinker hscEnv
-#else
-      initDynLinker dflags
-#endif
 
         -- ToDo: we should really look up these names properly, but
         -- it's a fiddle and not all the bits are exposed via the GHC

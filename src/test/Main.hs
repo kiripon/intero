@@ -60,11 +60,7 @@ argsparser =
              "<no location info>: Expected a span: \"<module-name/filepath>\" <start line> <start column> <end line> <end column> \"<sample string>\"\n"))
 
 maybeModuleStr :: String
-#if __GLASGOW_HASKELL__ >= 806
 maybeModuleStr = "GHC.Maybe"
-#else
-maybeModuleStr = "GHC.Base"
-#endif
 
 -- | Basic commands that should work out of the box.
 basics :: Spec
@@ -264,11 +260,7 @@ alltypes =
 
 -- | Are we on ghc8_2 or above?
 ghc8_2 :: Bool
-#if __GLASGOW_HASKELL__ >= 802
 ghc8_2 = True
-#else
-ghc8_2 = False
-#endif
 
 -- | Find uses of a variable.
 use :: Spec

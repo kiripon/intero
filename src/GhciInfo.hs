@@ -31,15 +31,6 @@ import           System.Directory
 import           TcHsSyn
 import           Var
 
-#if __GLASGOW_HASKELL__ <= 802
-import           NameSet
-#endif
-
-#if MIN_VERSION_ghc(7,8,3)
-#else
-import           Bag
-#endif
-
 -- | Collect type info data for the loaded modules.
 collectInfo :: (GhcMonad m)
             => Map ModuleName ModInfo -> [ModuleName] -> m (Map ModuleName ModInfo)
@@ -70,11 +61,7 @@ collectInfo ms loaded =
             Nothing -> return True
             Just mi ->
               do let fp =
-#if MIN_VERSION_ghc(8,0,4)
                        ml_hi_file (ms_location (modinfoSummary mi))
-#else
-                       ml_obj_file (ms_location (modinfoSummary mi))
-#endif
                      last' = modinfoLastUpdate mi
                  exists <- doesFileExist fp
                  if exists
@@ -97,7 +84,6 @@ getModInfo name =
 
 -- | Type-check the module without logging messages.
 typecheckModuleSilent :: GhcMonad m => ParsedModule -> m TypecheckedModule
-#if MIN_VERSION_ghc(8,0,1)
 typecheckModuleSilent parsed = do
   typecheckModule
     parsed
@@ -110,20 +96,6 @@ typecheckModuleSilent parsed = do
     }
   where
     nullLogAction _df _reason _sev _span _style _msgdoc = return ()
-#else
-typecheckModuleSilent parsed = do
-  typecheckModule
-    parsed
-    { GHC.pm_mod_summary =
-        (GHC.pm_mod_summary parsed)
-        { HscTypes.ms_hspp_opts =
-            (HscTypes.ms_hspp_opts (GHC.pm_mod_summary parsed))
-            {log_action = nullLogAction}
-        }
-    }
-  where
-    nullLogAction _df _reason _sev _span _style = return ()
-#endif
 
 getModuleLocation :: ParsedSource -> SrcSpan
 getModuleLocation pSource = case hsmodName (unLoc pSource) of
@@ -151,20 +123,8 @@ getTypeLHsBind :: (GhcMonad m)
                => TypecheckedModule
                -> LHsBind StageReaderId
                -> m [(Maybe Id,SrcSpan,Type)]
-#if MIN_VERSION_ghc(7,8,3)
 getTypeLHsBind _ (L _spn FunBind{fun_id = pid,fun_matches = MG{}}) =
   return (return (Just (unLoc pid),getLoc pid,varType (unLoc pid)))
-#else
-getTypeLHsBind _ (L _spn FunBind{fun_id = pid,fun_matches = MG _ _ _typ}) =
-  return (return (Just (unLoc pid),getLoc pid,varType (unLoc pid)))
-#endif
-#if MIN_VERSION_ghc(7,8,3)
-#else
-getTypeLHsBind m (L _spn AbsBinds{abs_binds = binds}) =
-  fmap concat
-       (mapM (getTypeLHsBind m)
-             (map snd (bagToList binds)))
-#endif
 getTypeLHsBind _ _ = return []
 -- getTypeLHsBind _ x =
 --   do df <- getSessionDynFlags
@@ -182,22 +142,12 @@ getTypeLHsExpr _ e =
        Nothing -> return Nothing
        Just expr ->
          return (Just (case unwrapVar (unLoc e) of
-#if __GLASGOW_HASKELL__ >= 806
                          HsVar _ (L _ i) -> Just i
-#elif __GLASGOW_HASKELL__ >= 800
-                         HsVar (L _ i) -> Just i
-#else
-                         HsVar i -> Just i
-#endif
                          _ -> Nothing
                       ,getLoc e
                       ,CoreUtils.exprType expr))
   where
-#if __GLASGOW_HASKELL__ >= 806
     unwrapVar (HsWrap _ _ var) = var
-#else
-    unwrapVar (HsWrap _ var) = var
-#endif
     unwrapVar e' = e'
 
 -- | Get id and type for patterns.
@@ -209,13 +159,7 @@ getTypeLPat _ (L spn pat) =
     getPatType (ConPatOut (L _ (RealDataCon dc)) _ _ _ _ _ _) =
       dataConRepType dc
     getPatType pat' = hsPatType pat'
-#if __GLASGOW_HASKELL__ >= 806
     getMaybeId (VarPat _ (L _ vid)) = Just vid
-#elif __GLASGOW_HASKELL__ >= 800
-    getMaybeId (VarPat (L _ vid)) = Just vid
-#else
-    getMaybeId (VarPat vid) = Just vid
-#endif
     getMaybeId _ = Nothing
 
 -- | Get ALL source spans in the source.
@@ -227,17 +171,7 @@ listifyAllSpans tcs =
 
 listifyStaged :: Typeable r
               => Stage -> (r -> Bool) -> Data.Generics.GenericQ [r]
-#if __GLASGOW_HASKELL__ <= 802
-listifyStaged s p =
-  everythingStaged
-    s
-    (++)
-    []
-    ([] `Data.Generics.mkQ`
-     (\x -> [x | p x]))
-#else
 listifyStaged _ p = Data.Generics.listify p
-#endif
 
 ------------------------------------------------------------------------------
 -- The following was taken from 'ghc-syb-utils'
@@ -253,23 +187,6 @@ data Stage
   | Renamer
   | TypeChecker
   deriving (Eq,Ord,Show)
-
--- | Like 'everything', but avoid known potholes, based on the 'Stage' that
---   generated the Ast.
-#if __GLASGOW_HASKELL__ <= 802
-everythingStaged :: Stage -> (r -> r -> r) -> r -> Data.Generics.GenericQ r -> Data.Generics.GenericQ r
-everythingStaged stage k z f x
-  | (const False `Data.Generics.extQ` postTcType `Data.Generics.extQ` fixity `Data.Generics.extQ` nameSet) x = z
-  | otherwise = foldl k (f x) (gmapQ (everythingStaged stage k z f) x)
-  where nameSet    = const (stage `elem` [Parser,TypeChecker]) :: NameSet -> Bool
-#if __GLASGOW_HASKELL__ >= 709
-        postTcType = const (stage<TypeChecker)                 :: PostTc Id Type -> Bool
-#else
-        postTcType = const (stage<TypeChecker)                 :: PostTcType -> Bool
-#endif
-        fixity     = const (stage<Renamer)                     :: GHC.Fixity -> Bool
-#endif
-
 
 -- | Pretty print the types into a 'SpanInfo'.
 toSpanInfo :: (Maybe Id,SrcSpan,Type) -> Maybe SpanInfo

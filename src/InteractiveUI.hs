@@ -29,13 +29,9 @@ module InteractiveUI (
 
 -- Intero
 import Intero.Compat
-#if __GLASGOW_HASKELL__ >= 800
 import           GHCi
 import           GHCi.RemoteTypes
-#endif
-#if __GLASGOW_HASKELL__ >= 802
 import           GHCi.Signals
-#endif
 import qualified Paths_intero
 import           Data.Version (showVersion)
 import qualified Data.Map as M
@@ -44,17 +40,13 @@ import           GhciTypes
 import           GhciFind
 
 -- GHCi
-#if __GLASGOW_HASKELL__ >= 800
 import           GHC.LanguageExtensions.Type
 import           GHCi.BreakArray as GHC
-#endif
 import qualified GhciMonad ( args, runStmt )
 import           GhciMonad hiding ( args, runStmt )
 import           GhciTags
 import           Debugger
-#if __GLASGOW_HASKELL__ >= 802
 import qualified Completion
-#endif
 
 -- The GHC interface
 import Data.IORef
@@ -70,32 +62,17 @@ import HscTypes ( tyThingParent_maybe, handleFlagWarnings, getSafeMode, hsc_IC,
 import           Module
 import           Name
 
-# if __GLASGOW_HASKELL__ >= 802
 import           Packages ( trusted, getPackageDetails, getInstalledPackageDetails, listVisibleModuleNames )
-#elif __GLASGOW_HASKELL__ >= 710
-import           Packages ( trusted, getPackageDetails, listVisibleModuleNames )
-#else
-import           Packages ( trusted, getPackageDetails, exposed, exposedModules, pkgIdMap )
-#endif
 
 import           PprTyThing
-#if __GLASGOW_HASKELL__ >= 802
 import           IfaceSyn
-#endif
 import           RdrName ( getGRE_NameQualifier_maybes )
 import           SrcLoc
 import qualified Lexer
 
 import           StringBuffer
-#if __GLASGOW_HASKELL__ < 709
-import           UniqFM ( eltsUFM )
-#endif
 
-#if __GLASGOW_HASKELL__ >= 802
 import           Outputable hiding ( printForUser, printForUserPartWay )
-#else
-import           Outputable hiding ( printForUser, printForUserPartWay, bold )
-#endif
 
 -- Other random utilities
 
@@ -132,18 +109,12 @@ import           Data.Function
 import Data.List ( find, group, intercalate, intersperse, isPrefixOf, nub,
                    partition, sort, sortBy)
 import           Data.Maybe
-#if __GLASGOW_HASKELL__ >= 802
 import qualified Data.Set as Set
-#endif
 
 import           Exception hiding (catch)
 
 import           Foreign.C
-#if __GLASGOW_HASKELL__ < 709
-import           Foreign.Safe
-#else
 import           Foreign
-#endif
 
 import           System.Directory
 import           System.Environment
@@ -168,34 +139,11 @@ import           GHC.IO.Handle ( hFlushAll )
 import           GHC.TopHandler ( topHandler )
 
 pprTyThing', pprTyThingInContext' :: TyThing -> SDoc
-#if __GLASGOW_HASKELL__ >= 802
 pprTyThing'          = pprTyThingHdr
 pprTyThingInContext' = pprTyThingInContext showToHeader
-#else
-pprTyThing'          = pprTyThing
-pprTyThingInContext' = pprTyThingInContext
-#endif
 
-#if __GLASGOW_HASKELL__ >= 802
 modulePackage :: Module -> UnitId
 modulePackage = moduleUnitId
-#elif __GLASGOW_HASKELL__ >= 800
-packageString :: UnitId -> String
-packageString = unitIdString
-modulePackage :: Module -> UnitId
-modulePackage = moduleUnitId
-#elif __GLASGOW_HASKELL__ >= 710
-packageString :: PackageKey -> String
-packageString = packageKeyString
-modulePackage :: Module -> PackageKey
-modulePackage = modulePackageKey
-#else
--- 7.8 and below
-packageString :: PackageId -> String
-packageString = packageIdString
-modulePackage :: Module -> PackageId
-modulePackage = modulePackageId
-#endif
 
 -----------------------------------------------------------------------------
 
@@ -304,7 +252,6 @@ ghciCommands = [
   where lifted m = \str -> lift (m stdout str)
 
 fillCmd :: Handle -> String -> GHCi ()
-#if __GLASGOW_HASKELL__ >= 802
 fillCmd h =
   withFillInput
     (\fp line col -> do
@@ -342,9 +289,6 @@ fillCmd h =
                             liftIO
                               (hPutStrLn h (Completion.substitutionString sub)))
                          subs)
-#else
-fillCmd _ = withFillInput (\_ _ _ -> pure ())
-#endif
 
 withFillInput :: (FilePath -> Int -> Int -> GHCi ()) -> String -> GHCi ()
 withFillInput cont input =
@@ -550,45 +494,21 @@ default_args :: [String]
 default_args = []
 
 
-#if __GLASGOW_HASKELL__ >= 800
 compat_ExtendedDefaultRules :: Extension
 compat_ExtendedDefaultRules =
   ExtendedDefaultRules
-#else
-compat_ExtendedDefaultRules :: ExtensionFlag
-compat_ExtendedDefaultRules =
-  Opt_ExtendedDefaultRules
-#endif
 
-#if __GLASGOW_HASKELL__ >= 800
 compat_AlternativeLayoutRule :: Extension
 compat_AlternativeLayoutRule =
   AlternativeLayoutRule
-#else
-compat_AlternativeLayoutRule :: ExtensionFlag
-compat_AlternativeLayoutRule =
-  Opt_AlternativeLayoutRule
-#endif
 
-#if __GLASGOW_HASKELL__ >= 800
 compat_ImplicitPrelude :: Extension
 compat_ImplicitPrelude =
   ImplicitPrelude
-#else
-compat_ImplicitPrelude :: ExtensionFlag
-compat_ImplicitPrelude =
-  Opt_ImplicitPrelude
-#endif
 
-#if __GLASGOW_HASKELL__ >= 800
 compat_MonomorphismRestriction :: Extension
 compat_MonomorphismRestriction =
   MonomorphismRestriction
-#else
-compat_MonomorphismRestriction :: ExtensionFlag
-compat_MonomorphismRestriction =
-  Opt_MonomorphismRestriction
-#endif
 
 interactiveUI :: GhciSettings -> [(FilePath, Maybe Phase)] -> Maybe [String]
               -> Ghc ()
@@ -963,11 +883,7 @@ mkPrompt = do
 
          --  use the 'as' name if there is one
         myIdeclName d | Just m <- ideclAs d = m
-#if __GLASGOW_HASKELL__ >= 802
                       | otherwise           = ideclName d
-#else
-                      | otherwise           = unLoc (ideclName d)
-#endif
 
         deflt_prompt = dots Outputable.<> context_bit Outputable.<> modules_bit
 
@@ -1163,13 +1079,9 @@ checkInputForLayout stmt getStmt = do
              eof <- Lexer.nextIsEOF
              if eof
                then Lexer.activeContext
-#if __GLASGOW_HASKELL__ < 709
-               else Lexer.lexer return >> goToEnd
-#else
 -- In 7.10 GHC API a bool "queueComments" was added.
 -- @see https://downloads.haskell.org/~ghc/latest/docs/html/libraries/ghc-7.10.1/src/Lexer.html#lexer
                else Lexer.lexer True return >> goToEnd
-#endif
 
 enqueueCommands :: [String] -> GHCi ()
 enqueueCommands cmds = do
@@ -1197,11 +1109,7 @@ runStmt stmt step
  | any (flip isPrefixOf stmt) declPrefixes
  = do _ <- liftIO $ tryIO $ hFlushAll stdin
       result <- GhciMonad.runDecls stmt
-#if __GLASGOW_HASKELL__ >= 802
       afterRunStmt (const True) (GHC.ExecComplete (Right result) 0)
-#else
-      afterRunStmt (const True) (GHC.RunOk result)
-#endif
 
  | otherwise
  = do -- In the new IO library, read handles buffer data even if the Handle
@@ -1216,7 +1124,6 @@ runStmt stmt step
         Just result -> afterRunStmt (const True) result
 
 -- | Clean up the GHCi environment after a statement has run
-#if __GLASGOW_HASKELL__ >= 802
 afterRunStmt :: (SrcSpan -> Bool) -> GHC.ExecResult -> GHCi Bool
 afterRunStmt _ (GHC.ExecComplete (Left e) _) = liftIO $ Exception.throwIO e
 afterRunStmt step_here run_result = do
@@ -1247,38 +1154,6 @@ afterRunStmt step_here run_result = do
   when b revertCAFs
 
   return (case run_result of GHC.ExecComplete _ _ -> True; _ -> False)
-#else
-afterRunStmt :: (SrcSpan -> Bool) -> GHC.RunResult -> GHCi Bool
-afterRunStmt _ (GHC.RunException e) = liftIO $ Exception.throwIO e
-afterRunStmt step_here run_result = do
-  resumes <- GHC.getResumeContext
-  case run_result of
-     GHC.RunOk names -> do
-        show_types <- isOptionSet ShowType
-        when show_types $ printTypeOfNames names
-     GHC.RunBreak _ names mb_info
-         | isNothing  mb_info ||
-           step_here (GHC.resumeSpan $ head resumes) -> do
-               mb_id_loc <- toBreakIdAndLocation mb_info
-               let bCmd = maybe "" ( \(_,l) -> onBreakCmd l ) mb_id_loc
-               if (null bCmd)
-                 then printStoppedAtBreakInfo (head resumes) names
-                 else enqueueCommands [bCmd]
-               -- run the command set with ":set stop <cmd>"
-               st <- getGHCiState
-               enqueueCommands [stop st]
-               return ()
-         | otherwise -> resume step_here GHC.SingleStep >>=
-                        afterRunStmt step_here >> return ()
-     _ -> return ()
-
-  flushInterpBuffers
-  liftIO installSignalHandlers
-  b <- isOptionSet RevertCAFs
-  when b revertCAFs
-
-  return (case run_result of GHC.RunOk _ -> True; _ -> False)
-#endif
 
 toBreakIdAndLocation ::
   Maybe GHC.BreakInfo -> GHCi (Maybe (Int, BreakLocation))
@@ -1938,11 +1813,7 @@ typeOfExpr
    h str
   = handleSourceError GHC.printException
   $ do
-#if __GLASGOW_HASKELL__ >= 802
        ty <- GHC.exprType GHC.TM_Inst str
-#else
-       ty <- GHC.exprType str
-#endif
        printForUser h $ sep [text str, nest 2 (dcolon <+> pprTypeForUser ty)]
 
 -----------------------------------------------------------------------------
@@ -2026,11 +1897,7 @@ allTypes h _ =
                                    show el ++ "," ++ show (1+ec)  ++ "): "
                                   ,flatten (showSDocForUser
                                               df
-#if __GLASGOW_HASKELL__ < 709
-                                              (neverQualifyNames,neverQualifyModules)
-#else
                                               neverQualify
-#endif
                                               (pprTypeForUser ty))]))
                Nothing -> return ()
           where flatten = unwords . words
@@ -2199,13 +2066,8 @@ isSafeModule m = do
     (msafe, pkgs) <- GHC.moduleTrustReqs m
     let trust  = showPpr dflags $ getSafeMode $ GHC.mi_trust $ fromJust iface
         pkg    = if packageTrusted dflags m then "trusted" else "untrusted"
-#if __GLASGOW_HASKELL__ >= 802
         (good, bad) = tallyPkgs dflags (Set.toList pkgs)
         getPackageStrings = map installedUnitIdString
-#else
-        (good, bad) = tallyPkgs dflags pkgs
-        getPackageStrings = map packageString
-#endif
 
     -- print info to user...
     liftIO $ putStrLn $ "Trust type is (Module: " ++ trust ++ ", Package: " ++ pkg ++ ")"
@@ -2226,23 +2088,12 @@ isSafeModule m = do
 
     packageTrusted dflags md
         | thisPackage dflags == modulePackage md = True
-#if __GLASGOW_HASKELL__ >= 710
         | otherwise = trusted $ getPackageDetails dflags (modulePackage md)
-#else
-        | otherwise = trusted $ getPackageDetails (pkgState dflags) (modulePackage md)
-#endif
 
     tallyPkgs dflags deps | not (packageTrustOn dflags) = ([], [])
                           | otherwise = partition part deps
         where
-#if __GLASGOW_HASKELL__ >= 802
               part pkg = trusted $ getInstalledPackageDetails dflags pkg
-#elif __GLASGOW_HASKELL__ >= 710
-              part pkg = trusted $ getPackageDetails dflags pkg
-#else
-              part pkg = trusted $ getPackageDetails state pkg
-              state = pkgState dflags
-#endif
 
 --------------------------------------------------------------------------------
 -- :extensions
@@ -2627,13 +2478,8 @@ iiSubsumes (IIDecl d1) (IIDecl d2)      -- A bit crude
      && (idhd1 `hidingSubsumes` idhd2)
   where
 -- I'm not so sure about this fix here...
-#if __GLASGOW_HASKELL__ < 709
-     idhd2 = ideclHiding d2
-     idhd1 = ideclHiding d1
-#else
      idhd2 = fmap (fmap unLoc) $ ideclHiding d2
      idhd1 = fmap (fmap unLoc) $ ideclHiding d1
-#endif
      _                `hidingSubsumes` Just (False,[]) = True
      Just (False, xs) `hidingSubsumes` Just (False,ys) = all (`elem` xs) ys
      h1               `hidingSubsumes` h2              = h1 == h2
@@ -2706,11 +2552,7 @@ showDynFlags show_all dflags = do
      text "warning settings:" $$
          nest 2 (vcat (map (setting wopt) compat_warningFlags))
   where
-#if __GLASGOW_HASKELL__ < 709
-        setting test (str, f, _)
-#else
         setting test (FlagSpec str f _ _)
-#endif
           | quiet     = empty
           | is_on     = fstr str
           | otherwise = fnostr str
@@ -2722,11 +2564,7 @@ showDynFlags show_all dflags = do
         fstr   str = text "-f"    Outputable.<> text str
         fnostr str = text "-fno-" Outputable.<> text str
 
-#if __GLASGOW_HASKELL__ < 709
-        (ghciFlags,others)  = partition (\(_, f, _) -> f `elem` flgs)
-#else
         (ghciFlags,others)  = partition (\(FlagSpec _ f _ _) -> f `elem` flgs)
-#endif
                                         DynFlags.fFlags
         flgs = [ Opt_PrintExplicitForalls
                , Opt_PrintExplicitKinds
@@ -2735,11 +2573,7 @@ showDynFlags show_all dflags = do
                , Opt_BreakOnError
                , Opt_PrintEvldWithShow
                ]
-#if  __GLASGOW_HASKELL__ < 800
-        compat_warningFlags = DynFlags.fWarningFlags
-#else
         compat_warningFlags = DynFlags.wWarningFlags
-#endif
 
 setArgs, setOptions :: [String] -> GHCi ()
 setProg, setEditor, setStop :: String -> GHCi ()
@@ -2838,11 +2672,7 @@ newDynFlags interactive_only minus_opts = do
               "package flags have changed, resetting and loading new packages..."
           GHC.setTargets []
           _ <- GHC.load LoadAllTargets
-#if  __GLASGOW_HASKELL__ < 800
-          linkinfo <- return dflags2
-#else
           linkinfo <- GHC.getSession
-#endif
           liftIO $ linkPackages linkinfo new_pkgs
           -- package flags changed, we can't re-use any of the old context
           setContextAfterLoad False []
@@ -3043,30 +2873,11 @@ showPackages = do
     text ("active package flags:"++if null pkg_flags then " none" else "")
     : map showFlag pkg_flags
   where
-#if __GLASGOW_HASKELL__ < 709
-        showFlag (ExposePackage   p) = text $ "  -package " ++ p
-#else
 -- This flag now has more info about module renaming.
 -- @see
 -- https://downloads.haskell.org/~ghc/latest/docs/html/libraries/ghc-7.10.1/DynFlags.html#v:ExposePackage
-#if __GLASGOW_HASKELL__ >= 800
         showFlag (ExposePackage _str arg _mr) = text $ "  -package " ++ show arg
-#else
-        showFlag (ExposePackage arg mr) = text $ "  -package " ++ show arg ++ " " ++ show mr
-#endif
-#endif
         showFlag (HidePackage     p) = text $ "  -hide-package " ++ p
-#if __GLASGOW_HASKELL__ < 800
-        showFlag (IgnorePackage   p) = text $ "  -ignore-package " ++ p
-#endif
-#if __GLASGOW_HASKELL__ < 709
--- This flag just isn't in the 7.10 API
-        showFlag (ExposePackageId p) = text $ "  -package-id " ++ p
-#endif
-#if __GLASGOW_HASKELL__ < 800
-        showFlag (TrustPackage    p) = text $ "  -trust " ++ p
-        showFlag (DistrustPackage p) = text $ "  -distrust " ++ p
-#endif
 
 showPaths :: GHCi ()
 showPaths = do
@@ -3100,11 +2911,7 @@ showLanguages' show_all dflags =
           nest 2 (vcat (map (setting xopt) DynFlags.xFlags))
      ]
   where
-#if __GLASGOW_HASKELL__ < 709
-   setting test (str, f, _)
-#else
    setting test (FlagSpec str f _ _)
-#endif
           | quiet     = empty
           | is_on     = text "-X" Outputable.<> text str
           | otherwise = text "-XNo" Outputable.<> text str
@@ -3274,14 +3081,7 @@ wrapIdentCompleterWithModifier modifChars fun = completeWordWithPrev Nothing wor
   getModifier = find (`elem` modifChars)
 
 allExposedModules :: DynFlags -> [ModuleName]
-#if __GLASGOW_HASKELL__ < 709
-allExposedModules dflags
- = concat (map exposedModules (filter exposed (eltsUFM pkg_db)))
- where
-  pkg_db = pkgIdMap (pkgState dflags)
-#else
 allExposedModules = listVisibleModuleNames
-#endif
 
 completeExpression = completeQuotedWord (Just '\\') "\"" listFiles
                         completeIdentifier
@@ -3447,11 +3247,7 @@ bold c | do_bold   = text start_bold Outputable.<> c Outputable.<> text end_bold
 
 backCmd :: String -> GHCi ()
 backCmd = noArgs $ withSandboxOnly ":back" $ do
-#if  __GLASGOW_HASKELL__ < 800
-  (names, _, pan) <- GHC.back
-#else
   (names, _, pan, _) <- GHC.back 1
-#endif
   printForUser stdout $ ptext (sLit "Logged breakpoint at") <+> ppr pan
   printTypeOfNames names
    -- run the command set with ":set stop <cmd>"
@@ -3460,11 +3256,7 @@ backCmd = noArgs $ withSandboxOnly ":back" $ do
 
 forwardCmd :: String -> GHCi ()
 forwardCmd = noArgs $ withSandboxOnly ":forward" $ do
-#if  __GLASGOW_HASKELL__ >= 800
   (names, ix, pan, _ ) <- GHC.forward 1
-#else
-  (names, ix, pan) <- GHC.forward
-#endif
   printForUser stdout $ (if (ix == 0)
                            then ptext (sLit "Stopped at")
                            else ptext (sLit "Logged breakpoint at")) <+> ppr pan
@@ -3716,12 +3508,7 @@ listAround pan do_highlight = do
           prefixed = zipWith ($) highlighted bs_line_nos
           output   = BS.intercalate (BS.pack "\n") prefixed
 
-#if __GLASGOW_HASKELL__ >= 802
       let utf8Decoded = utf8DecodeByteString output
-#else
-      utf8Decoded <- liftIO $ BS.useAsCStringLen output
-                        $ \(p,n) -> utf8DecodeString (castPtr p) n
-#endif
       liftIO $ putStrLn utf8Decoded
   where
         file  = GHC.srcSpanFile pan
@@ -3824,11 +3611,7 @@ turnOffBreak loc = do
   (arr, _) <- getModBreak (breakModule loc)
   setBreakFlag dflags False arr (breakTick loc)
 
-#if  __GLASGOW_HASKELL__ >= 800
 getModBreak :: Module -> GHCi (ForeignRef BreakArray, Array Int SrcSpan)
-#else
-getModBreak :: GHC.GhcMonad m => Module -> m (GHC.BreakArray, Array BreakIndex SrcSpan)
-#endif
 getModBreak m = do
    mod_info <- fromJust <$> GHC.getModuleInfo m
    let modBreaks  = GHC.modInfoModBreaks mod_info
@@ -3836,18 +3619,11 @@ getModBreak m = do
    let ticks      = GHC.modBreaks_locs  modBreaks
    return (arr, ticks)
 
-#if  __GLASGOW_HASKELL__ >= 800
 setBreakFlag :: DynFlags -> Bool -> ForeignRef BreakArray -> Int -> GHCi Bool
 setBreakFlag _ toggle arr i = do
   hsc_env <- GHC.getSession
   liftIO $ enableBreakpoint hsc_env arr i toggle
   return True
-#else
-setBreakFlag :: DynFlags -> Bool -> GHC.BreakArray -> Int -> GHCi Bool
-setBreakFlag dflags toggle arr i
-   | toggle    = liftIO $ GHC.setBreakOn  dflags arr i
-   | otherwise = liftIO $ GHC.setBreakOff dflags arr i
-#endif
 
 
 -- ---------------------------------------------------------------------------
@@ -3918,13 +3694,7 @@ lookupModuleName :: GHC.GhcMonad m => ModuleName -> m Module
 lookupModuleName mName = GHC.lookupModule mName Nothing
 
 isHomeModule :: Module -> Bool
-#if  __GLASGOW_HASKELL__ >= 800
 isHomeModule m = modulePackage m == mainUnitId
-#elif __GLASGOW_HASKELL__ < 709
-isHomeModule m = modulePackage m == mainPackageId
-#else
-isHomeModule m = modulePackage m == mainPackageKey
-#endif
 
 -- TODO: won't work if home dir is encoded.
 -- (changeDirectory may not work either in that case.)
@@ -3977,15 +3747,6 @@ wantNameFromInterpretedModule noCanDo str and_then =
                                 text " is not interpreted"
                else and_then n
 
-#if  __GLASGOW_HASKELL__ < 800
-sl_fs :: a -> a
-sl_fs = id
-#endif
-
 
 compat_allFlags :: [String]
-#if  __GLASGOW_HASKELL__ < 800
-compat_allFlags = allFlags
-#else
 compat_allFlags = allNonDeprecatedFlags
-#endif
