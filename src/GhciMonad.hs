@@ -85,11 +85,14 @@ data GHCiState = GHCiState
                 -- tickarrays caches the TickArray for loaded modules,
                 -- so that we don't rebuild it each time the user sets
                 -- a breakpoint.
-        -- available ghci commands
+        
         ghci_commands       :: [Command],
-        -- ":" at the GHCi prompt repeats the last command, so we
-        -- remember is here:
+            -- ^ available ghci commands
+        ghci_macros         :: [Command],
+            -- ^ user-defined macros
         last_command        :: Maybe Command,
+            -- ^ @:@ at the GHCi prompt repeats the last command, so we
+            -- remember is here:
         cmdqueue            :: [String],
 
         remembered_ctx      :: [InteractiveImport],
