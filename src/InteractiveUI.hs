@@ -1833,14 +1833,15 @@ typeAt h str =
          do infos <- fmap mod_infos getGHCiState
             result <- findType infos fp sample sl sc el ec
             case result of
-              FindTypeFail err -> liftIO (hPutStrLn h err)
-              FindType info' ty ->
-                printForUserModInfo h
-                  (modinfoInfo info')
-                  (sep [text sample,nest 2 (dcolon <+> ppr ty)])
-              FindTyThing info' tything ->
-                printForUserModInfo h (modinfoInfo info')
-                                      (pprTyThing' tything))
+              Left err -> liftIO (hPutStrLn h err)
+              Right result' -> case result' of
+                FindType info' ty ->
+                  printForUserModInfo h
+                    (modinfoInfo info')
+                    (sep [text sample,nest 2 (dcolon <+> ppr ty)])
+                FindTyThing info' tything ->
+                  printForUserModInfo h (modinfoInfo info')
+                                        (pprTyThing' tything))
 
 -----------------------------------------------------------------------------
 -- :uses
