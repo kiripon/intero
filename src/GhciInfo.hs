@@ -1,6 +1,6 @@
-{-# LANGUAGE CPP #-}
+{-# LANGUAGE CPP                 #-}
+{-# LANGUAGE RankNTypes          #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE RankNTypes #-}
 
 -- | Get information on modules, identifiers, etc.
 
@@ -13,20 +13,20 @@ import qualified CoreUtils
 import           Data.Data
 import qualified Data.Generics
 import           Data.List
-import           Data.Map.Strict (Map)
-import qualified Data.Map.Strict as M
+import           Data.Map.Strict   (Map)
+import qualified Data.Map.Strict   as M
 import           Data.Maybe
 import           Data.Time
 import           DataCon
 import           Desugar
 import           DynFlags
 import           GHC
-import           GhcMonad
 import           GhciTypes
+import           GhcMonad
 import           HscTypes
 import           Intero.Compat
 import           Outputable
-import           Prelude hiding (mod)
+import           Prelude           hiding (mod)
 import           System.Directory
 import           TcHsSyn
 import           Var
@@ -100,7 +100,7 @@ typecheckModuleSilent parsed = do
 getModuleLocation :: ParsedSource -> SrcSpan
 getModuleLocation pSource = case hsmodName (unLoc pSource) of
   Just located -> getLoc located
-  Nothing -> noSrcSpan
+  Nothing      -> noSrcSpan
 
 -- | Get ALL source spans in the module.
 processAllTypeCheckedModule :: GhcMonad m
@@ -143,12 +143,12 @@ getTypeLHsExpr _ e =
        Just expr ->
          return (Just (case unwrapVar (unLoc e) of
                          HsVar _ (L _ i) -> Just i
-                         _ -> Nothing
+                         _               -> Nothing
                       ,getLoc e
                       ,CoreUtils.exprType expr))
   where
     unwrapVar (HsWrap _ _ var) = var
-    unwrapVar e' = e'
+    unwrapVar e'               = e'
 
 -- | Get id and type for patterns.
 getTypeLPat :: (GhcMonad m)
@@ -160,7 +160,7 @@ getTypeLPat _ (L spn pat) =
       dataConRepType dc
     getPatType pat' = hsPatType pat'
     getMaybeId (VarPat _ (L _ vid)) = Just vid
-    getMaybeId _ = Nothing
+    getMaybeId _                    = Nothing
 
 -- | Get ALL source spans in the source.
 listifyAllSpans :: Typeable a

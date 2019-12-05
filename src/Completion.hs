@@ -1,10 +1,10 @@
-{-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE CPP #-}
-{-# LANGUAGE ViewPatterns #-}
-{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE BangPatterns        #-}
+{-# LANGUAGE CPP                 #-}
+{-# LANGUAGE FlexibleContexts    #-}
+{-# LANGUAGE LambdaCase          #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TupleSections #-}
-{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE TupleSections       #-}
+{-# LANGUAGE ViewPatterns        #-}
 
 -- | A GHC code completion module.
 
@@ -25,7 +25,7 @@ import           Control.Monad.IO.Class
 import           Control.Monad.State
 import           Data.Generics
 import           Data.List
-import qualified Data.Map.Strict as M
+import qualified Data.Map.Strict        as M
 import           Data.Maybe
 import           Data.Ord
 import           DynFlags
@@ -38,7 +38,7 @@ import           OccName
 import           Outputable
 import           RdrName
 import           TcRnDriver
-import           TcRnTypes (tcg_rdr_env)
+import           TcRnTypes              (tcg_rdr_env)
 import           TyCoRep
 import           TysWiredIn
 import           Unify
@@ -56,21 +56,21 @@ data CompletableModule =
 -- | All the context we need to generate completions for a declaration
 -- in a module.
 data Declaration = Declaration
-  { declarationBind :: !(HsBindLR StageReaderName StageReaderName)
+  { declarationBind              :: !(HsBindLR StageReaderName StageReaderName)
     -- ^ The actual declaration, which we use to find holes and
     -- substitute them with candidate replacements.
     -- ^ A sample source, which we use merely for debugging.
-  , declarationRealSrcSpan :: !RealSrcSpan
+  , declarationRealSrcSpan       :: !RealSrcSpan
     -- ^ A source span which we can provide to the client IDE.
-  , declarationParsedModule :: !ParsedModule
+  , declarationParsedModule      :: !ParsedModule
    -- ^ The declaration belongs to a parsed module which we'll use to
    -- try out alterations to the tree and see if they type-check.
-  , declarationRenamedModule :: !RenamedSource
+  , declarationRenamedModule     :: !RenamedSource
      -- ^ The renamed module contains 'UnboundedVar', which marks a hole.
-  , declarationModuleInfo :: !ModuleInfo
+  , declarationModuleInfo        :: !ModuleInfo
   , declarationTypecheckedModule :: !TypecheckedSource
     -- ^ Used to get type of holes.
-  , declarationGlobalRdrEnv :: !GlobalRdrEnv
+  , declarationGlobalRdrEnv      :: !GlobalRdrEnv
   }
 
 instance Show Declaration where
@@ -92,9 +92,9 @@ newtype LineNumber = LineNumber Int
 -- can fill in with candidates.
 data Hole = Hole
   { holeRealSrcSpan :: !RealSrcSpan
-  , holeName :: !OccName
-  , holeType :: !Type
-  , holeDf :: !DynFlags
+  , holeName        :: !OccName
+  , holeType        :: !Type
+  , holeDf          :: !DynFlags
   , holeDeclaration :: !Declaration
   }
 
@@ -108,8 +108,8 @@ instance Show Hole where
 -- | Substition of a source span in the source code with a new string.
 data Substitution = Substitution
   { substitutionReplacement :: !Name
-  , substitutionString :: !String
-  , substitutionType :: !Type
+  , substitutionString      :: !String
+  , substitutionType        :: !Type
   }
 
 instance Show Substitution where
@@ -174,7 +174,7 @@ declarationHoles df declaration = go declaration
       if getLoc expr == RealSrcSpan rs
         then case expr of
                L _ (HsVar _ (L _ i)) -> pure (idType i)
-               _ -> Nothing
+               _                     -> Nothing
         else Nothing
     getHoleName :: LHsExpr StageReaderName -> Maybe (OccName, RealSrcSpan)
     getHoleName =
@@ -266,7 +266,7 @@ greltQualification :: GlobalRdrElt -> Maybe ModuleName
 greltQualification grelt =
   case gre_imp grelt of
     (ImpSpec (ImpDeclSpec {is_as = m}) _:_) -> Just m
-    _ -> Nothing
+    _                                       -> Nothing
 
 -- | The element is not qualified.
 greltUnqualified :: GlobalRdrElt -> Bool
@@ -279,7 +279,7 @@ greltUnqualified grelt = local || importedUnqualified
 -- Testing out completions
 
 data StringEquality = StringEquality
-  { _stringEqualityDf :: DynFlags
+  { _stringEqualityDf   :: DynFlags
   , _stringEqualityType :: Type
   }
 instance Show StringEquality where
@@ -349,36 +349,36 @@ unifies _df t1 t2 = theirs t1 t2 && ours t1 t2
       --    "," ++ showPpr df y ++ ")=>" ++ show (isJust (tcUnifyTyKi x y)))
         (isJust (tcUnifyTyKi x y))
     -- Let them deal with lits:
-    ours x@LitTy {} y@LitTy {} = theirs x y
+    ours x@LitTy {} y@LitTy {}       = theirs x y
     -- We assume a type variable unifies with anything, leave it to
     -- them:
-    ours x@TyVarTy {} y = theirs x y
-    ours x y@TyVarTy {} = theirs x y
+    ours x@TyVarTy {} y              = theirs x y
+    ours x y@TyVarTy {}              = theirs x y
     -- We ignore forall's:
-    ours (ForAllTy _ x) y = ours x y
-    ours x (ForAllTy _ y) = ours x y
+    ours (ForAllTy _ x) y            = ours x y
+    ours x (ForAllTy _ y)            = ours x y
     -- We ignore casts:
-    ours (CastTy x _) y = ours x y
-    ours x (CastTy y _) = ours x y
+    ours (CastTy x _) y              = ours x y
+    ours x (CastTy y _)              = ours x y
     -- We assume they know what to do with a coercion:
-    ours x y@CoercionTy {} = theirs x y
-    ours x@CoercionTy {} y = theirs x y
+    ours x y@CoercionTy {}           = theirs x y
+    ours x@CoercionTy {} y           = theirs x y
     -- We only let functions unify with functions, and apps unify with apps:
-    ours (FunTy x y) (FunTy x' y') = ours x x' && ours y y'
-    ours (AppTy f x) (AppTy f' x') = ours f f' && ours x x'
+    ours (FunTy x y) (FunTy x' y')   = ours x x' && ours y y'
+    ours (AppTy f x) (AppTy f' x')   = ours f f' && ours x x'
     -- We let them deal with this:
     ours x@TyConApp {} y@TyConApp {} = theirs x y
     -- These three should unify, so we let them deal with it:
-    ours x@AppTy {} y@TyConApp {} = theirs x y
-    ours y@TyConApp {} x@AppTy {} = theirs x y
+    ours x@AppTy {} y@TyConApp {}    = theirs x y
+    ours y@TyConApp {} x@AppTy {}    = theirs x y
     -- The rest SHOULD NOT be allowed to unify, because it's too
     -- general to produce DWIM results:
-    ours FunTy {} _ = False
-    ours _ FunTy {} = False
-    ours AppTy {} _ = False
-    ours _ AppTy {} = False
-    ours TyConApp {} _ = False
-    ours _ TyConApp {} = False
+    ours FunTy {} _                  = False
+    ours _ FunTy {}                  = False
+    ours AppTy {} _                  = False
+    ours _ AppTy {}                  = False
+    ours TyConApp {} _               = False
+    ours _ TyConApp {}               = False
 
 isAny :: DynFlags -> Type -> Bool
 isAny df t = showPpr df t == "Any"

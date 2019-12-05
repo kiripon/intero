@@ -13,27 +13,27 @@ module GhciTags (
   createETagsFileCmd
 ) where
 
-import Exception
-import GHC
-import GhciMonad
-import Intero.Compat
-import Outputable
+import           Exception
+import           GHC
+import           GhciMonad
+import           Intero.Compat
+import           Outputable
 
 -- ToDo: figure out whether we need these, and put something appropriate
 -- into the GHC API instead
-import Name (nameOccName)
-import OccName (pprOccName)
-import ConLike
-import MonadUtils
+import           ConLike
+import           MonadUtils
+import           Name            (nameOccName)
+import           OccName         (pprOccName)
 
-import Data.Function
-import Data.Maybe
-import Data.Ord
-import Panic
-import Data.List
-import Control.Monad
-import System.IO
-import System.IO.Error
+import           Control.Monad
+import           Data.Function
+import           Data.List
+import           Data.Maybe
+import           Data.Ord
+import           Panic
+import           System.IO
+import           System.IO.Error
 
 -----------------------------------------------------------------------------
 -- create tags file for currently loaded modules.
@@ -51,8 +51,8 @@ createCTagsWithRegExesCmd ""   =
 createCTagsWithRegExesCmd file =
   ghciCreateTagsFile CTagsWithRegExes file
 
-createETagsFileCmd ""    = ghciCreateTagsFile ETags "TAGS"
-createETagsFileCmd file  = ghciCreateTagsFile ETags file
+createETagsFileCmd ""   = ghciCreateTagsFile ETags "TAGS"
+createETagsFileCmd file = ghciCreateTagsFile ETags file
 
 data TagsKind = ETags | CTagsWithLineNumbers | CTagsWithRegExes
 
@@ -114,12 +114,12 @@ listModuleTags m = do
 
 data TagInfo = TagInfo
   { tagExported :: Bool -- is tag exported
-  , tagKind :: Char   -- tag kind
-  , tagName :: String -- tag name
-  , tagFile :: String -- file name
-  , tagLine :: Int    -- line number
-  , tagCol :: Int     -- column number
-  , tagSrcInfo :: Maybe (String,Integer)  -- source code line and char offset
+  , tagKind     :: Char   -- tag kind
+  , tagName     :: String -- tag name
+  , tagFile     :: String -- file name
+  , tagLine     :: Int    -- line number
+  , tagCol      :: Int     -- column number
+  , tagSrcInfo  :: Maybe (String,Integer)  -- source code line and char offset
   }
 
 
@@ -186,13 +186,13 @@ showCTag ti =
   where
     tagCmd =
       case tagSrcInfo ti of
-        Nothing -> show $tagLine ti
+        Nothing          -> show $tagLine ti
         Just (srcLine,_) -> "/^"++ foldr escapeSlashes [] srcLine ++"$/"
 
       where
-        escapeSlashes '/' r = '\\' : '/' : r
+        escapeSlashes '/' r  = '\\' : '/' : r
         escapeSlashes '\\' r = '\\' : '\\' : r
-        escapeSlashes c r = c : r
+        escapeSlashes c r    = c : r
 
 
 -- etags format, for Emacs/XEmacs

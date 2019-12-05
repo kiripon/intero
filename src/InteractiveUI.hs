@@ -1,9 +1,9 @@
-{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE BangPatterns             #-}
+{-# LANGUAGE CPP                      #-}
+{-# LANGUAGE MagicHash                #-}
 {-# LANGUAGE NondecreasingIndentation #-}
-{-# LANGUAGE CPP #-}
-{-# LANGUAGE MagicHash #-}
-{-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE ScopedTypeVariables      #-}
+{-# LANGUAGE ViewPatterns             #-}
 
 {-# OPTIONS -fno-cse #-}
 -- -fno-cse is needed for GLOBAL_VAR's to behave properly
@@ -28,115 +28,119 @@ module InteractiveUI (
 
 
 -- Intero
-import Intero.Compat
+import qualified Data.Map                    as M
+import           Data.Version                (showVersion)
 import           GHCi
 import           GHCi.RemoteTypes
 import           GHCi.Signals
-import qualified Paths_intero
-import           Data.Version (showVersion)
-import qualified Data.Map as M
+import           GhciFind
 import           GhciInfo
 import           GhciTypes
-import           GhciFind
+import           Intero.Compat
+import qualified Paths_intero
 
 -- GHCi
-import           GHC.LanguageExtensions.Type
-import           GHCi.BreakArray as GHC
-import qualified GhciMonad ( args, runStmt )
-import           GhciMonad hiding ( args, runStmt )
-import           GhciTags
-import           Debugger
 import qualified Completion
+import           Debugger
+import           GHC.LanguageExtensions.Type
+import           GHCi.BreakArray             as GHC
+import           GhciMonad                   hiding (args, runStmt)
+import qualified GhciMonad                   (args, runStmt)
+import           GhciTags
 
 -- The GHC interface
-import Data.IORef
+import           Data.IORef
 import           DynFlags
-import           GhcMonad ( modifySession )
+import           GHC                         (BreakIndex, Ghc,
+                                              InteractiveImport (..),
+                                              LoadHowMuch (..), Phase, Resume,
+                                              SingleStep, Target (..),
+                                              TargetId (..), TyThing (..),
+                                              handleSourceError)
 import qualified GHC
-import GHC ( LoadHowMuch(..), Target(..),  TargetId(..), InteractiveImport(..),
-             TyThing(..), Phase, BreakIndex, Resume, SingleStep, Ghc,
-             handleSourceError )
+import           GhcMonad                    (modifySession)
+import           HscTypes                    (getSafeMode, handleFlagWarnings,
+                                              hsc_IC, setInteractivePrintName,
+                                              tyThingParent_maybe)
 import           HsImpExp
-import HscTypes ( tyThingParent_maybe, handleFlagWarnings, getSafeMode, hsc_IC,
-                  setInteractivePrintName )
+import           IfaceSyn
+import qualified Lexer
 import           Module
 import           Name
-
-import           Packages ( trusted, getPackageDetails, getInstalledPackageDetails, listVisibleModuleNames )
-
+import           Outputable                  hiding (printForUser,
+                                              printForUserPartWay)
+import           Packages                    (getInstalledPackageDetails,
+                                              getPackageDetails,
+                                              listVisibleModuleNames, trusted)
 import           PprTyThing
-import           IfaceSyn
-import           RdrName ( getGRE_NameQualifier_maybes )
+import           RdrName                     (getGRE_NameQualifier_maybes)
 import           SrcLoc
-import qualified Lexer
-
 import           StringBuffer
-
-import           Outputable hiding ( printForUser, printForUserPartWay )
 
 -- Other random utilities
 
-import           BasicTypes hiding ( isTopLevel )
+import           BasicTypes                  hiding (isTopLevel)
 import           Config
 import           Digraph
 import           Encoding
 import           FastString
 import           Linker
-import           Maybes ( orElse, expectJust )
+import           Maybes                      (expectJust, orElse)
 import           NameSet
-import           Panic hiding ( showException )
+import           Panic                       hiding (showException)
 import           Util
 
 -- Haskell Libraries
-import           System.Console.Haskeline as Haskeline
-import Network.Socket
-import qualified Network
-import Network.BSD
-import           Control.Applicative hiding (empty)
-import           Control.Monad as Monad
-import           Control.Monad.Trans.Class
+import           Control.Applicative         hiding (empty)
+import           Control.Concurrent          (forkIO, threadDelay)
+import           Control.Monad               as Monad
 import           Control.Monad.IO.Class
-import           Control.Concurrent (threadDelay, forkIO)
+import           Control.Monad.Trans.Class
+import qualified Network
+import           Network.BSD
+import           Network.Socket
+import           System.Console.Haskeline    as Haskeline
 #if MIN_VERSION_directory(1,2,3)
-import           Data.Time (getCurrentTime)
+import           Data.Time                   (getCurrentTime)
 #endif
 
 import           Data.Array
-import qualified Data.ByteString.Char8 as BS
+import qualified Data.ByteString.Char8       as BS
 import           Data.Char
 import           Data.Function
 
-import Data.List ( find, group, intercalate, intersperse, isPrefixOf, nub,
-                   partition, sort, sortBy)
+import           Data.List                   (find, group, intercalate,
+                                              intersperse, isPrefixOf, nub,
+                                              partition, sort, sortBy)
 import           Data.Maybe
-import qualified Data.Set as Set
-
-import           Exception hiding (catch)
-
-import           Foreign.C
+import qualified Data.Set                    as Set
+import           Exception                   hiding (catch)
 import           Foreign
-
+import           Foreign.C
 import           System.Directory
 import           System.Environment
-import           System.Exit ( exitWith, ExitCode(..) )
+import           System.Exit                 (ExitCode (..), exitWith)
 import           System.FilePath
 import           System.IO
 import           System.IO.Error
-import           System.IO.Unsafe ( unsafePerformIO )
+import           System.IO.Unsafe            (unsafePerformIO)
 import           System.Process
 import           Text.Printf
-import           Text.Read ( readMaybe )
+import           Text.Read                   (readMaybe)
 
+
+import           GHC.Exts                    (unsafeCoerce#)
+import           GHC.IO.Exception            (IOErrorType (InvalidArgument))
+import           GHC.IO.Handle               (hFlushAll)
+import           GHC.TopHandler              (topHandler)
+
+-- Platform dependent libraries
 #ifndef mingw32_HOST_OS
-import           System.Posix hiding ( getEnv )
+import           System.Posix                hiding (getEnv)
 #else
 import qualified System.Win32
 #endif
 
-import           GHC.Exts ( unsafeCoerce# )
-import           GHC.IO.Exception ( IOErrorType(InvalidArgument) )
-import           GHC.IO.Handle ( hFlushAll )
-import           GHC.TopHandler ( topHandler )
 
 pprTyThing', pprTyThingInContext' :: TyThing -> SDoc
 pprTyThing'          = pprTyThingHdr
@@ -332,7 +336,7 @@ keepGoing' a str = a str >> return False
 keepGoingPaths :: ([FilePath] -> InputT GHCi ()) -> (String -> InputT GHCi Bool)
 keepGoingPaths a str
  = do case toArgs str of
-          Left err -> liftIO $ hPutStrLn stderr err
+          Left err   -> liftIO $ hPutStrLn stderr err
           Right args -> a args
       return False
 
@@ -684,7 +688,7 @@ runGHCi paths maybe_exprs = do
     either_dir <- liftIO $ tryIO (getEnv "HOME")
     case either_dir of
       Right home -> return (Just (home </> ".ghci"))
-      _ -> return Nothing
+      _          -> return Nothing
 
    canonicalizePath' :: FilePath -> IO (Maybe FilePath)
    canonicalizePath' fp = liftM Just (canonicalizePath fp)
@@ -890,8 +894,8 @@ mkPrompt = do
         f ('%':'l':xs) = ppr (1 + line_number st) Outputable.<> f xs
         f ('%':'s':xs) = deflt_prompt Outputable.<> f xs
         f ('%':'%':xs) = char '%' Outputable.<> f xs
-        f (x:xs) = char x Outputable.<> f xs
-        f [] = empty
+        f (x:xs)       = char x Outputable.<> f xs
+        f []           = empty
 
   dflags <- getDynFlags
   return (showSDoc dflags (f (prompt st)))
@@ -1219,14 +1223,14 @@ lookupCommand :: String -> GHCi (MaybeCommand)
 lookupCommand "" = do
   st <- getGHCiState
   case last_command st of
-      Just c -> return $ GotCommand c
+      Just c  -> return $ GotCommand c
       Nothing -> return NoLastCommand
 lookupCommand str = do
   mc <- lookupCommand' str
   st <- getGHCiState
   setGHCiState st{ last_command = mc }
   return $ case mc of
-           Just c -> GotCommand c
+           Just c  -> GotCommand c
            Nothing -> BadCommand
 
 lookupCommand' :: String -> GHCi (Maybe Command)
@@ -1432,7 +1436,7 @@ changeDirectory [] = do
   -- :cd on its own changes to the user's home directory
   either_dir <- liftIO $ tryIO getHomeDirectory
   case either_dir of
-     Left _e -> return ()
+     Left _e   -> return ()
      Right dir -> changeDirectory [dir]
 changeDirectory (dir:_) = do
   graph <- ghc_getModuleGraph
@@ -1513,7 +1517,7 @@ chooseEditFile =
               Nothing   -> throwGhcException (CmdLineError "No files to edit.")
 
   where fromTarget (GHC.Target (GHC.TargetFile f _) _ _) = Just f
-        fromTarget _ = Nothing -- when would we get a module target?
+        fromTarget _                                     = Nothing -- when would we get a module target?
 
 
 -----------------------------------------------------------------------------
@@ -1967,15 +1971,15 @@ parseSpan str =
                  Right (fp,sl,sc - 1,el,ec - 1,maybeStr st)
         maybeStr s = case reads s of
                        [(s',"")] -> s'
-                       _ -> s
+                       _         -> s
         getString s =
           case reads s of
             [(s',rest)] -> (s',rest)
-            _ -> span (/= ' ') s
+            _           -> span (/= ' ') s
         extractInt s' =
           case span (/= ' ') (dropWhile1 (== ' ') s') of
             (reads -> [(i,_)],s'') -> Right (i,dropWhile1 (== ' ') s'')
-            _ -> Left ("Expected integer in " ++ s')
+            _                      -> Left ("Expected integer in " ++ s')
           where dropWhile1 _ [] = []
                 dropWhile1 p xs@(x:xs')
                   | p x = xs'
@@ -2008,8 +2012,8 @@ quit _ = return True
 scriptCmd :: String -> InputT GHCi ()
 scriptCmd ws = do
   case words ws of
-    [s]    -> runScript s
-    _      -> throwGhcException (CmdLineError "syntax:  :script <filename>")
+    [s] -> runScript s
+    _   -> throwGhcException (CmdLineError "syntax:  :script <filename>")
 
 runScript :: String    -- ^ filename
            -> InputT GHCi ()
@@ -2503,7 +2507,7 @@ setCmd str
   = case getCmd str of
     Right ("args",    rest) ->
         case toArgs rest of
-            Left err -> liftIO (hPutStrLn stderr err)
+            Left err   -> liftIO (hPutStrLn stderr err)
             Right args -> setArgs args
     Right ("prog",    rest) ->
         case toArgs rest of
@@ -2514,7 +2518,7 @@ setCmd str
     Right ("editor",  rest) -> setEditor  $ dropWhile isSpace rest
     Right ("stop",    rest) -> setStop    $ dropWhile isSpace rest
     _ -> case toArgs str of
-         Left err -> liftIO (hPutStrLn stderr err)
+         Left err  -> liftIO (hPutStrLn stderr err)
          Right wds -> setOptions wds
 
 setiCmd :: String -> GHCi ()
@@ -2522,7 +2526,7 @@ setiCmd ""   = GHC.getInteractiveDynFlags >>= liftIO . showDynFlags False
 setiCmd "-a" = GHC.getInteractiveDynFlags >>= liftIO . showDynFlags True
 setiCmd str  =
   case toArgs str of
-    Left err -> liftIO (hPutStrLn stderr err)
+    Left err  -> liftIO (hPutStrLn stderr err)
     Right wds -> newDynFlags True wds
 
 showOptions :: Bool -> GHCi ()
@@ -2719,7 +2723,7 @@ unsetOptions str
 
 isMinus :: String -> Bool
 isMinus ('-':_) = True
-isMinus _ = False
+isMinus _       = False
 
 isPlus :: String -> Either String String
 isPlus ('+':opt) = Left opt
@@ -2989,7 +2993,7 @@ ghciCompleteWord line@(left,_) = case firstWord of
         maybe_cmd <- lookupCommand' c
         case maybe_cmd of
             Just (_,_,f) -> return f
-            Nothing -> return completeFilename
+            Nothing      -> return completeFilename
 
 completeGhciCommand = wrapCompleter " " $ \w -> do
   macros <- liftIO $ readIORef macros_ref
@@ -2998,7 +3002,7 @@ completeGhciCommand = wrapCompleter " " $ \w -> do
   let command_names = map (':':) . map cmdName $ cmds
   let{ candidates = case w of
       ':' : ':' : _ -> map (':':) command_names
-      _ -> nub $ macro_names ++ command_names }
+      _             -> nub $ macro_names ++ command_names }
   return $ filter (w `isPrefixOf`) candidates
 
 completeMacro = wrapIdentCompleter $ \w -> do
@@ -3431,7 +3435,7 @@ listCmd' "" = do
                  (r:_) ->
                      do let traceIt = case GHC.resumeHistory r of
                                       [] -> text "rerunning with :trace,"
-                                      _ -> empty
+                                      _  -> empty
                             doWhat = traceIt <+> text ":back then :list"
                         printForUser stdout (text "Unable to list source for" <+>
                                              ppr pan

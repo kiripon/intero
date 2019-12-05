@@ -1,7 +1,7 @@
-{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE BangPatterns             #-}
+{-# LANGUAGE CPP                      #-}
 {-# LANGUAGE NondecreasingIndentation #-}
-{-# LANGUAGE CPP #-}
-{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE ScopedTypeVariables      #-}
 
 -- | Find type/location information.
 
@@ -9,19 +9,19 @@ module GhciFind
   (findType,FindType(..),findLoc,findNameUses,findCompletions,guessModule)
   where
 
-import           Intero.Compat
-import           Module
 import           Control.Exception
 import           Data.List
-import           Data.Map (Map)
-import qualified Data.Map as M
+import           Data.Map          (Map)
+import qualified Data.Map          as M
 import           Data.Maybe
 import           DynFlags
 import           FastString
 import           GHC
-import           GhcMonad
-import           GhciInfo (showppr)
+import           GhciInfo          (showppr)
 import           GhciTypes
+import           GhcMonad
+import           Intero.Compat
+import           Module
 import           Name
 import           SrcLoc
 import           System.Directory
@@ -40,7 +40,7 @@ findQualifiedSource importDecls sample =
      return (qual++".", ident, mnames)
   where breakQual xs = case break (== '.') (reverse xs) of
                          (h,_:t) -> Just (reverse h, reverse t)
-                         _ -> Nothing
+                         _       -> Nothing
         knownAs qual m
           | qual == moduleNameString name || maybe False (qual ==) (asName m) =
             Just name
@@ -115,7 +115,7 @@ findLocalizedCompletions spans' prefix _sl _sc _el _ec =
              let str = showppr df var
              if isPrefixOf prefix str
                then case getSrcLoc (getName var) of
-                      RealSrcLoc {} -> Just str
+                      RealSrcLoc {}   -> Just str
                       -- Probably an internally generated name. Ignore it:
                       -- See here: https://github.com/chrisdone/intero/issues/531
                       -- We ignore defered-scope-error names like foo_a8s76
@@ -269,7 +269,7 @@ findName infos mi string sl sc el ec =
     Just name ->
       case getSrcSpan name of
         UnhelpfulSpan{} -> tryExternalModuleResolution
-        _ -> return (Right (getName name))
+        _               -> return (Right (getName name))
   where tryExternalModuleResolution =
           case find (matchName string)
                     (fromMaybe [] (modInfoTopLevelScope (modinfoInfo mi))) of
@@ -387,7 +387,7 @@ compareSpanInfoStart :: SpanInfo -> SpanInfo -> Ordering
 compareSpanInfoStart this that =
   case compare (spaninfoStartLine this) (spaninfoStartLine that) of
     EQ -> compare (spaninfoStartCol this) (spaninfoStartCol that)
-    c -> c
+    c  -> c
 
 -- | Does the 'SpanInfo' contain the location given by the Ints?
 containsSpanInfo :: Int -> Int -> Int -> Int -> SpanInfo -> Bool

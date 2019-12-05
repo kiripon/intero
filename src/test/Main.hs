@@ -1,20 +1,20 @@
-{-# LANGUAGE CPP #-}
+{-# LANGUAGE CPP                 #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 -- | Test that various commands work properly.
 
 module Main where
 
-import Control.Exception
-import Control.Monad.IO.Class
-import Control.Monad (when, forM_)
-import Data.Char
-import System.IO
-import System.IO.Temp
-import System.FilePath ((</>))
-import System.Process
-import System.Info (os)
-import Test.Hspec
-import Text.Regex
+import           Control.Exception
+import           Control.Monad          (forM_, when)
+import           Control.Monad.IO.Class
+import           Data.Char
+import           System.FilePath        ((</>))
+import           System.Info            (os)
+import           System.IO
+import           System.IO.Temp
+import           System.Process
+import           Test.Hspec
+import           Text.Regex
 
 -- | Main entry point.
 main :: IO ()
@@ -79,10 +79,10 @@ basics =
     quote s = opQuote : s ++ [clQuote]
     opQuote = case os of
         "mingw32" -> '`'
-        _ -> '‘'
+        _         -> '‘'
     clQuote = case os of
         "mingw32" -> '\''
-        _ -> '’'
+        _         -> '’'
 
 -- | Loading files and seeing the results.
 load :: Spec

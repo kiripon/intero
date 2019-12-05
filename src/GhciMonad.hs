@@ -1,7 +1,7 @@
-{-# LANGUAGE UnboxedTuples #-}
-{-# LANGUAGE MagicHash #-}
+{-# LANGUAGE CPP               #-}
 {-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE CPP #-}
+{-# LANGUAGE MagicHash         #-}
+{-# LANGUAGE UnboxedTuples     #-}
 {-# OPTIONS_GHC -fno-cse -fno-warn-orphans -fno-warn-warnings-deprecations #-}
 -- -fno-cse is needed for GLOBAL_VAR's to behave properly
 
@@ -32,37 +32,37 @@ module GhciMonad (
 
 #include "HsVersions.h"
 
--- ghci-ng
-import GhciTypes
-import Data.Map.Strict (Map)
+import           Data.Map.Strict           (Map)
+import           DynFlags
+import           GHC                       (BreakIndex)
 import qualified GHC
-import GhcMonad         hiding (liftIO)
-import Outputable       hiding (printForUser, printForUserPartWay)
+import           GHCi.ObjLink              as ObjLink
+import           GhciTypes
+import           GhcMonad                  hiding (liftIO)
+import           HscTypes
+import           Linker
+import           Module
+import           Outputable                hiding (printForUser,
+                                            printForUserPartWay)
 import qualified Outputable
-import Util
-import DynFlags
-import HscTypes
-import SrcLoc
-import Module
-import GHCi.ObjLink as ObjLink
-import GHC (BreakIndex)
-import Linker
+import           SrcLoc
+import           Util
 
-import Exception
-import Numeric
-import Data.Array
-import Data.Int         ( Int64 )
-import Data.IORef
-import System.CPUTime
-import System.Environment
-import System.IO
-import Control.Monad
-import GHC.Exts
+import           Control.Monad
+import           Data.Array
+import           Data.Int                  (Int64)
+import           Data.IORef
+import           Exception
+import           GHC.Exts
+import           Numeric
+import           System.CPUTime
+import           System.Environment
+import           System.IO
 
-import System.Console.Haskeline (CompletionFunc, InputT)
-import qualified System.Console.Haskeline as Haskeline
-import Control.Monad.Trans.Class
-import Control.Monad.IO.Class
+import           Control.Monad.IO.Class
+import           Control.Monad.Trans.Class
+import           System.Console.Haskeline  (CompletionFunc, InputT)
+import qualified System.Console.Haskeline  as Haskeline
 
 -----------------------------------------------------------------------------
 -- GHCi monad
@@ -71,28 +71,28 @@ type Command = (String, String -> InputT GHCi Bool, CompletionFunc GHCi)
 
 data GHCiState = GHCiState
      {
-        progname       :: String,
-        args           :: [String],
-        prompt         :: String,
-        prompt2        :: String,
-        editor         :: String,
-        stop           :: String,
-        options        :: [GHCiOption],
-        line_number    :: !Int,         -- input line
-        break_ctr      :: !Int,
-        breaks         :: ![(Int, BreakLocation)],
-        tickarrays     :: ModuleEnv TickArray,
+        progname            :: String,
+        args                :: [String],
+        prompt              :: String,
+        prompt2             :: String,
+        editor              :: String,
+        stop                :: String,
+        options             :: [GHCiOption],
+        line_number         :: !Int,         -- input line
+        break_ctr           :: !Int,
+        breaks              :: ![(Int, BreakLocation)],
+        tickarrays          :: ModuleEnv TickArray,
                 -- tickarrays caches the TickArray for loaded modules,
                 -- so that we don't rebuild it each time the user sets
                 -- a breakpoint.
         -- available ghci commands
-        ghci_commands  :: [Command],
+        ghci_commands       :: [Command],
         -- ":" at the GHCi prompt repeats the last command, so we
         -- remember is here:
-        last_command   :: Maybe Command,
-        cmdqueue       :: [String],
+        last_command        :: Maybe Command,
+        cmdqueue            :: [String],
 
-        remembered_ctx :: [InteractiveImport],
+        remembered_ctx      :: [InteractiveImport],
              -- the imports that the user has asked for, via import
              -- declarations and :module commands.  This list is
              -- persistent over :reloads (but any imports for modules
@@ -102,28 +102,28 @@ data GHCiState = GHCiState
 
              -- See bugs #2049, #1873, #1360
 
-        transient_ctx  :: [InteractiveImport],
+        transient_ctx       :: [InteractiveImport],
              -- An import added automatically after a :load, usually of
              -- the most recently compiled module.  May be empty if
              -- there are no modules loaded.  This list is replaced by
              -- :load, :reload, and :add.  In between it may be modified
              -- by :module.
 
-        ghc_e :: Bool, -- True if this is 'ghc -e' (or runghc)
+        ghc_e               :: Bool, -- True if this is 'ghc -e' (or runghc)
 
         -- help text to display to a user
-        short_help :: String,
-        long_help  :: String,
+        short_help          :: String,
+        long_help           :: String,
 
         -- stored state
-        mod_infos :: !(Map ModuleName ModInfo),
-        rdrNamesInScope :: ![GHC.RdrName],
+        mod_infos           :: !(Map ModuleName ModInfo),
+        rdrNamesInScope     :: ![GHC.RdrName],
 
         ghci_work_directory :: FilePath,
             -- ^ Used to store the working directory associated with
             -- GHCi. This is what the current directory will be reverted
             -- to after calls to GHC.load.
-        ghc_work_directory :: FilePath
+        ghc_work_directory  :: FilePath
             -- ^ Used as the working directory during calls to GHC.load.
             -- After the call to GHC.load completes, the current working
             -- directory will be reverted to the value of

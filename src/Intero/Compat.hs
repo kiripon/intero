@@ -17,12 +17,12 @@ module Intero.Compat
   , StageReaderId
   ) where
 
-import           TyCoRep
-import           TyCon
 import           CmdLineParser
-import qualified Data.Graph as SCC
+import qualified Data.Graph    as SCC
 import           DynFlags
 import           GHC
+import           TyCon
+import           TyCoRep
 
 ghc_tyConFlavour :: TyCon -> String
 ghc_tyConFlavour n =
