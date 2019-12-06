@@ -27,33 +27,31 @@ module GhciMonad (
         printForUserNeverQualify, printForUserModInfo,
 
         printForUser, printForUserPartWay, prettyLocations,
-        initInterpBuffering, turnOffBuffering, flushInterpBuffers,
+        initInterpBuffering,
+        turnOffBuffering, turnOffBuffering_,
+        flushInterpBuffers,
     ) where
-
-#include "HsVersions.h"
 
 import           Data.Map.Strict           (Map)
 import           DynFlags
 import           GHC                       (BreakIndex)
 import qualified GHC
-import           GHCi.ObjLink              as ObjLink
+import           GHCi
+import           GHCi.RemoteTypes
 import           GhciTypes
 import           GhcMonad                  hiding (liftIO)
 import           HscTypes
-import           Linker
 import           Module
 import           Outputable                hiding (printForUser,
                                             printForUserPartWay)
 import qualified Outputable
 import           SrcLoc
-import           Util
 
 import           Control.Monad
 import           Data.Array
 import           Data.Int                  (Int64)
 import           Data.IORef
 import           Exception
-import           GHC.Exts
 import           Numeric
 import           System.CPUTime
 import           System.Environment
@@ -61,6 +59,7 @@ import           System.IO
 
 import           Control.Monad.IO.Class
 import           Control.Monad.Trans.Class
+import qualified GHC.LanguageExtensions    as LangExt
 import           System.Console.Haskeline  (CompletionFunc, InputT)
 import qualified System.Console.Haskeline  as Haskeline
 
@@ -85,7 +84,7 @@ data GHCiState = GHCiState
                 -- tickarrays caches the TickArray for loaded modules,
                 -- so that we don't rebuild it each time the user sets
                 -- a breakpoint.
-        
+
         ghci_commands       :: [Command],
             -- ^ available ghci commands
         ghci_macros         :: [Command],
@@ -126,11 +125,17 @@ data GHCiState = GHCiState
             -- ^ Used to store the working directory associated with
             -- GHCi. This is what the current directory will be reverted
             -- to after calls to GHC.load.
-        ghc_work_directory  :: FilePath
+        ghc_work_directory  :: FilePath,
             -- ^ Used as the working directory during calls to GHC.load.
             -- After the call to GHC.load completes, the current working
             -- directory will be reverted to the value of
             -- `ghci_work_directory`.
+
+        flushStdHandles     :: ForeignHValue,
+            -- ^ @hFlush stdout; hFlush stderr@ in the interpreter
+        noBuffering         :: ForeignHValue
+            -- ^ @hSetBuffering NoBuffering@ for stdin/stdout/stderr
+
      }
 
 type TickArray = Array Int [(BreakIndex,SrcSpan)]
@@ -363,9 +368,9 @@ revertCAFs :: GHCi ()
 revertCAFs = do
   liftIO rts_revertCAFs
   s <- getGHCiState
-  when (not (ghc_e s)) $ liftIO turnOffBuffering
-        -- Have to turn off buffering again, because we just
-        -- reverted stdout, stderr & stdin to their defaults.
+  when (not (ghc_e s)) turnOffBuffering
+    -- Have to turn off buffering again, because we just
+    -- reverted stdout, stderr & stdin to their defaults.
 
 foreign import ccall "revertCAFs" rts_revertCAFs  :: IO ()
         -- Make it "safe", just in case
@@ -374,53 +379,45 @@ foreign import ccall "revertCAFs" rts_revertCAFs  :: IO ()
 -- To flush buffers for the *interpreted* computation we need
 -- to refer to *its* stdout/stderr handles
 
-GLOBAL_VAR(stdin_ptr,  error "no stdin_ptr",  Ptr ())
-GLOBAL_VAR(stdout_ptr, error "no stdout_ptr", Ptr ())
-GLOBAL_VAR(stderr_ptr, error "no stderr_ptr", Ptr ())
-
--- After various attempts, I believe this is the least bad way to do
--- what we want.  We know look up the address of the static stdin,
--- stdout, and stderr closures in the loaded base package, and each
--- time we need to refer to them we cast the pointer to a Handle.
--- This avoids any problems with the CAF having been reverted, because
--- we'll always get the current value.
---
--- The previous attempt that didn't work was to compile an expression
--- like "hSetBuffering stdout NoBuffering" into an expression of type
--- IO () and run this expression each time we needed it, but the
--- problem is that evaluating the expression might cache the contents
--- of the Handle rather than referring to it from its static address
--- each time.  There's no safe workaround for this.
-
-initInterpBuffering :: Ghc ()
-initInterpBuffering = do -- make sure these are linked
-    hscEnv <- getSession
-    liftIO $ do
-      initDynLinker hscEnv
-
-        -- ToDo: we should really look up these names properly, but
-        -- it's a fiddle and not all the bits are exposed via the GHC
-        -- interface.
-      mb_stdin_ptr  <- ObjLink.lookupSymbol "base_GHCziIOziHandleziFD_stdin_closure"
-      mb_stdout_ptr <- ObjLink.lookupSymbol "base_GHCziIOziHandleziFD_stdout_closure"
-      mb_stderr_ptr <- ObjLink.lookupSymbol "base_GHCziIOziHandleziFD_stderr_closure"
-
-      let f ref (Just ptr) = writeIORef ref ptr
-          f _   Nothing    = panic "interactiveUI:setBuffering2"
-      zipWithM_ f [stdin_ptr,stdout_ptr,stderr_ptr]
-                  [mb_stdin_ptr,mb_stdout_ptr,mb_stderr_ptr]
+-- | Compile "hFlush stdout; hFlush stderr" once, so we can use it repeatedly
+initInterpBuffering :: Ghc (ForeignHValue, ForeignHValue)
+initInterpBuffering = do
+  nobuf <- compileGHCiExpr $
+   "do { System.IO.hSetBuffering System.IO.stdin System.IO.NoBuffering; " ++
+       " System.IO.hSetBuffering System.IO.stdout System.IO.NoBuffering; " ++
+       " System.IO.hSetBuffering System.IO.stderr System.IO.NoBuffering }"
+  flush <- compileGHCiExpr $
+   "do { System.IO.hFlush System.IO.stdout; " ++
+       " System.IO.hFlush System.IO.stderr }"
+  return (nobuf, flush)
 
 flushInterpBuffers :: GHCi ()
-flushInterpBuffers
- = liftIO $ do getHandle stdout_ptr >>= hFlush
-               getHandle stderr_ptr >>= hFlush
+flushInterpBuffers = do
+  st <- getGHCiState
+  hsc_env <- GHC.getSession
+  liftIO $ evalIO hsc_env (flushStdHandles st)
 
-turnOffBuffering :: IO ()
-turnOffBuffering
- = do hdls <- mapM getHandle [stdin_ptr,stdout_ptr,stderr_ptr]
-      mapM_ (\h -> hSetBuffering h NoBuffering) hdls
+turnOffBuffering :: GHCi ()
+turnOffBuffering = do
+  st <- getGHCiState
+  turnOffBuffering_ (noBuffering st)
 
-getHandle :: IORef (Ptr ()) -> IO Handle
-getHandle ref = do
-  (Ptr addr) <- readIORef ref
-  case addrToAny# addr of (# hval #) -> return (unsafeCoerce# hval)
+turnOffBuffering_ :: GhcMonad m => ForeignHValue -> m ()
+turnOffBuffering_ fhv = do
+  hsc_env <- getSession
+  liftIO $ evalIO hsc_env fhv
+
+
+compileGHCiExpr :: GhcMonad m => String -> m ForeignHValue
+compileGHCiExpr expr = do
+  hsc_env <- getSession
+  let dflags = hsc_dflags hsc_env
+      -- RebindableSyntax can wreak havoc with GHCi in several ways
+      -- (see #13385 and #14342 for examples), so we take care to disable it
+      -- for the duration of running expressions that are internal to GHCi.
+      no_rb_hsc_env =
+        hsc_env { hsc_dflags = xopt_unset dflags LangExt.RebindableSyntax }
+  setSession no_rb_hsc_env
+  res <- GHC.compileExprRemote expr
+  setSession hsc_env
+  pure res

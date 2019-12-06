@@ -67,31 +67,27 @@ executable intero
     GhciFind
     Intero.Compat
     Paths_intero
+    Completion
   build-depends:
-    base < 5,
     array,
+    base < 5,
     bytestring,
+    containers,
     directory,
     filepath,
-    ghc >= 8.6.5 && <= 8.6.5,
+    ghc >= 8.6.5,
+    ghc-boot >= 8.6.5,
+    ghc-boot-th,
     ghc-paths,
+    ghci,
     haskeline,
-    process,
-    transformers,
-    syb,
-    containers,
-    time,
+    mtl,
     network,
+    process,
     random,
-    mtl
-
-  if impl(ghc>=8.6.5)
-    other-modules:
-      Completion
-    build-depends:
-      ghci,
-      ghc-boot-th
-
+    syb,
+    time,
+    transformers
   if os(windows)
     build-depends:
       Win32

@@ -521,7 +521,7 @@ interactiveUI config srcs maybe_exprs = do
    _ <- liftIO $ newStablePtr stderr
 
     -- Initialise buffering for the *interpreted* I/O system
-   initInterpBuffering
+   (nobuffering, flush) <- initInterpBuffering
 
    -- The initial set of DynFlags used for interactive evaluation is the same
    -- as the global DynFlags, plus -XExtendedDefaultRules and
@@ -532,23 +532,23 @@ interactiveUI config srcs maybe_exprs = do
                $ dflags
    GHC.setInteractiveDynFlags dflags'
 
-   liftIO $ when (isNothing maybe_exprs) $ do
+   when (isNothing maybe_exprs) $ do
         -- Only for GHCi (not runghc and ghc -e):
 
         -- Turn buffering off for the compiled program's stdout/stderr
-        turnOffBuffering
+        turnOffBuffering_ nobuffering
         -- Turn buffering off for GHCi's stdout
-        hFlush stdout
-        hSetBuffering stdout NoBuffering
+        liftIO $ hFlush stdout
+        liftIO $ hSetBuffering stdout NoBuffering
         -- We don't want the cmd line to buffer any input that might be
         -- intended for the program, so unbuffer stdin.
-        hSetBuffering stdin NoBuffering
-        hSetBuffering stderr NoBuffering
+        liftIO $ hSetBuffering stdin NoBuffering
+        liftIO $ hSetBuffering stderr NoBuffering
         -- On Unix, stdin will use the locale encoding.  The IO library
 #if defined(mingw32_HOST_OS)
         -- doesn't do this on Windows (yet), so for now we use UTF-8,
         -- for consistency with GHC 6.10 and to make the tests work.
-        hSetEncoding stdin utf8
+        liftIO $ hSetEncoding stdin utf8
 #endif
 
    default_editor <- liftIO $ findEditor
@@ -578,7 +578,9 @@ interactiveUI config srcs maybe_exprs = do
                    mod_infos           = M.empty,
                    rdrNamesInScope     = [],
                    ghci_work_directory = current_directory,
-                   ghc_work_directory  = current_directory
+                   ghc_work_directory  = current_directory,
+                   flushStdHandles     = flush,
+                   noBuffering         = nobuffering
                  }
    -- Start the GHCI interactive main loop. This loop handles all
    -- types of commands, including loading modules and modifying the
