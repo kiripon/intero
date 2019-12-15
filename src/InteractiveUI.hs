@@ -915,7 +915,7 @@ runCommands' eh sourceErrorHandler gCmd = do
     case b of
       Nothing -> return ()
       Just success -> do
-        when (not success) $ maybe (return ()) lift sourceErrorHandler
+        unless success $ maybe (return ()) lift sourceErrorHandler
         runCommands' eh sourceErrorHandler gCmd
 
 -- | Evaluate a single line of user input (either :<command> or Haskell code)
@@ -1464,7 +1464,8 @@ editFile str =
      let cmd = editor st
      when (null cmd)
        $ throwGhcException (CmdLineError "editor not set, use :set editor")
-     code <- liftIO $ system (cmd ++ ' ':file)
+     let cmdArgs = ' ':file
+     code <- liftIO $ system (cmd ++ cmdArgs)
      when (code == ExitSuccess)
        $ reloadModule ""
 
@@ -1648,12 +1649,10 @@ addModule files = do
 
 -- | @:reload@ command
 reloadModule :: String -> InputT GHCi ()
-reloadModule m = do
-  _ <- doLoad True $
-        if null m then LoadAllTargets
-                  else LoadUpTo (GHC.mkModuleName m)
-  return ()
-
+reloadModule m = void $ doLoad True $ loadTargets
+  where
+    loadTargets | null m    = LoadAllTargets
+                | otherwise = LoadUpTo (GHC.mkModuleName m)
 
 doLoad :: Bool -> LoadHowMuch -> InputT GHCi SuccessFlag
 doLoad retain_context howmuch = do
@@ -1753,20 +1752,10 @@ setContextKeepingPackageModules keep_ctx trans_ctx = do
                    transient_ctx  = filterSubsumed new_rem_ctx trans_ctx }
   setGHCContextFromGHCiState
 
-
--- keepPackageImports :: [InteractiveImport] -> GHCi [InteractiveImport]
--- keepPackageImports = filterM is_pkg_import
---   where
---      is_pkg_import :: InteractiveImport -> GHCi Bool
---      is_pkg_import (IIModule _) = return False
---      is_pkg_import (IIDecl d)
---          = do e <- gtry $ GHC.findModule mod_name (ideclPkgQual d)
---               case e :: Either SomeException Module of
---                 Left _  -> return False
---                 Right m -> return (not (isHomeModule m))
---         where
---           mod_name = unLoc (ideclName d)
-
+-- | Filters a list of 'InteractiveImport', clearing out any home package
+-- imports so only imports from external packages are preserved.  ('IIModule'
+-- counts as a home package import, because we are only able to bring a
+-- full top-level into scope when the source is available.)
 keepPackageImports :: [InteractiveImport] -> GHCi [InteractiveImport]
 keepPackageImports = filterM is_pkg_import
   where
