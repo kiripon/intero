@@ -73,6 +73,7 @@ executable intero
     base < 5,
     bytestring,
     containers,
+    deepseq,
     directory,
     filepath,
     ghc >= 8.6.5,

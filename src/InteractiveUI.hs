@@ -29,8 +29,6 @@ module InteractiveUI (
     ) where
 
 -- Intero
-import qualified Data.Map                    as M
-import           Data.Version                (showVersion)
 import           GHCi
 import           GHCi.RemoteTypes
 import           GHCi.Signals
@@ -79,7 +77,6 @@ import           SrcLoc
 import           StringBuffer
 
 -- Other random utilities
-
 import           BasicTypes                  hiding (isTopLevel)
 import           Config
 import           Digraph
@@ -95,19 +92,20 @@ import           Util
 -- Haskell Libraries
 import           Control.Applicative         hiding (empty)
 import           Control.Concurrent          (forkIO, threadDelay)
+import           Control.DeepSeq             (deepseq)
 import           Control.Exception           (assert)
 import           Control.Monad               as Monad
 import           Control.Monad.IO.Class
 import           Control.Monad.Trans.Class
 import           Control.Monad.Trans.Except
 import           Control.Monad.Trans.Maybe
+import           Data.Time                   (getCurrentTime)
+import           Data.Version                (showVersion)
 import qualified Network
 import           Network.BSD
 import           Network.Socket
 import           System.Console.Haskeline    as Haskeline
-#if MIN_VERSION_directory(1,2,3)
-import           Data.Time                   (getCurrentTime)
-#endif
+
 
 import           Data.Array
 import qualified Data.ByteString.Char8       as BS
@@ -117,6 +115,7 @@ import           Data.Function
 import           Data.List                   (find, group, intercalate,
                                               intersperse, isPrefixOf, nub,
                                               partition, sort, sortBy)
+import qualified Data.Map                    as M
 import           Data.Maybe
 import qualified Data.Set                    as Set
 import           Exception                   hiding (catch)
@@ -140,7 +139,7 @@ import           GHC.IO.Handle               (hFlushAll)
 import           GHC.TopHandler              (topHandler)
 
 -- Platform dependent libraries
-#ifndef mingw32_HOST_OS
+#if !defined(mingw32_HOST_OS)
 import           System.Posix                hiding (getEnv)
 #else
 import qualified System.Win32
@@ -718,7 +717,7 @@ runGHCi paths maybe_exprs = do
   let show_prompt = verbosity dflags > 0 || is_tty
 
   -- reset line number
-  getGHCiState >>= \st -> setGHCiState st{line_number=1}
+  modifyGHCiState $ \st -> st{line_number=1}
 
   -- Get the names in scope
   names <- GHC.getRdrNamesInScope
@@ -784,26 +783,24 @@ nextInputLine show_prompt is_tty
 -- don't need to check .. and ../.. etc. because "."  always refers to
 -- the same directory while a process is running.
 
-checkPerms :: String -> IO Bool
-#ifdef mingw32_HOST_OS
+checkPerms :: FilePath -> IO Bool
+#if defined(mingw32_HOST_OS)
 checkPerms _ = return True
 #else
-checkPerms name =
+checkPerms file =
   handleIO (\_ -> return False) $ do
-    st <- getFileStatus name
+    st <- getFileStatus file
     me <- getRealUserID
-    if fileOwner st /= me then do
-        putStrLn $ "WARNING: " ++ name ++ " is owned by someone else!"
-        return True
-     else do
-        let mode = System.Posix.fileMode st
-        if (groupWriteMode == (mode `intersectFileModes` groupWriteMode))
-            || (otherWriteMode == (mode `intersectFileModes` otherWriteMode))
-            then do
-                putStrLn $ "*** WARNING: " ++ name ++
-                           " is writable by someone else!"
-                return True
-            else return True
+    let mode = System.Posix.fileMode st
+        ok = (fileOwner st == me || fileOwner st == 0) &&
+             groupWriteMode /= mode `intersectFileModes` groupWriteMode &&
+             otherWriteMode /= mode `intersectFileModes` otherWriteMode
+    unless ok $
+      -- #8248: Improving warning to include a possible fix.
+      putStrLn $ "*** WARNING: " ++ file ++
+                 " is writable by someone else, IGNORING!" ++
+                 "\nSuggested fix: execute 'chmod go-w " ++ file ++ "'"
+    return ok
 #endif
 
 incrementLineNo :: InputT GHCi ()
@@ -888,7 +885,10 @@ installInteractivePrint :: Maybe String -> Bool -> GHCi ()
 installInteractivePrint Nothing _  = return ()
 installInteractivePrint (Just ipFun) exprmode = do
   ok <- trySuccess $ do
-                name <- head <$> GHC.parseName ipFun
+                names <- GHC.parseName ipFun
+                let name = case names of
+                             name':_ -> name'
+                             []      -> panic "installInteractivePrint"
                 modifySession (\he -> let new_ic = setInteractivePrintName (hsc_IC he) name
                                       in he{hsc_IC = new_ic})
                 return Succeeded
@@ -993,8 +993,8 @@ runOneCommand eh gCmd = do
               -- temporarily compensate line-number for multi-line input
               result <- timeIt $ lift $ runStmtWithLineNum fst_line_num ml_stmt GHC.RunToCompletion
               return $ Just result
-        else do -- single line input and :{-multiline input
-          last_line_num <- lift (line_number <$> getGHCiState)
+        else do -- single line input and :{ - multiline input
+          last_line_num <- line_number <$> getGHCiState
           -- reconstruct first line num from last line num and stmt
           let fst_line_num | stmt_nl_cnt > 0 = last_line_num - (stmt_nl_cnt2 + 1)
                            | otherwise = last_line_num -- single line input
@@ -1064,8 +1064,11 @@ checkInputForLayout stmt getStmt = do
 
 enqueueCommands :: [String] -> GHCi ()
 enqueueCommands cmds = do
-  st <- getGHCiState
-  setGHCiState st{ cmdqueue = cmds ++ cmdqueue st }
+  -- make sure we force any exceptions in the commands while we're
+  -- still inside the exception handler, otherwise bad things will
+  -- happen (see #10501)
+  cmds `deepseq` return ()
+  modifyGHCiState $ \st -> st{ cmdqueue = cmds ++ cmdqueue st }
 
 -- | If we one of these strings prefixes a command, then we treat it as a decl
 -- rather than a stmt.
@@ -1108,9 +1111,12 @@ afterRunStmt _ (GHC.ExecComplete (Left e) _) = liftIO $ Exception.throwIO e
 afterRunStmt step_here run_result = do
   resumes <- GHC.getResumeContext
   case run_result of
-     GHC.ExecComplete (Right names) _ -> do
-        show_types <- isOptionSet ShowType
-        when show_types $ printTypeOfNames names
+     GHC.ExecComplete{..} ->
+       case execResult of
+          Left ex -> liftIO $ Exception.throwIO ex
+          Right names -> do
+            show_types <- isOptionSet ShowType
+            when show_types $ printTypeOfNames names
      GHC.ExecBreak names mb_info
          | isNothing  mb_info ||
            step_here (GHC.resumeSpan $ head resumes) -> do
@@ -1125,12 +1131,11 @@ afterRunStmt step_here run_result = do
                return ()
          | otherwise -> resume step_here GHC.SingleStep >>=
                         afterRunStmt step_here >> return ()
-     _ -> return ()
 
   flushInterpBuffers
-  liftIO installSignalHandlers
-  b <- isOptionSet RevertCAFs
-  when b revertCAFs
+  withSignalHandlers $ do
+     b <- isOptionSet RevertCAFs
+     when b revertCAFs
 
   return (case run_result of GHC.ExecComplete _ _ -> True; _ -> False)
 
@@ -1319,8 +1324,9 @@ info allInfo s  = handleSourceError GHC.printException $ do
 infoThing :: GHC.GhcMonad m => Bool -> String -> m SDoc
 infoThing allInfo str = do
     names     <- GHC.parseName str
-    mb_stuffs <- mapM (ghc_getInfo allInfo) names
-    let filtered = filterOutChildren (\(t,_f,_ci,_fi) -> t) (catMaybes mb_stuffs)
+    mb_stuffs <- mapM (GHC.getInfo allInfo) names
+    let filtered = filterOutChildren (\(t,_f,_ci,_fi,_sd) -> t)
+                                     (catMaybes mb_stuffs)
     return $ vcat (intersperse (text "") $ map pprInfo filtered)
 
   -- Filter out names whose parent is also there Good
@@ -1335,9 +1341,10 @@ filterOutChildren get_thing xs
                      Just p  -> getName p `elemNameSet` all_names
                      Nothing -> False
 
-pprInfo :: (TyThing, Fixity, [GHC.ClsInst], [GHC.FamInst]) -> SDoc
-pprInfo (thing, fixity, cls_insts, fam_insts)
-  =  pprTyThingInContextLoc thing
+pprInfo :: (TyThing, Fixity, [GHC.ClsInst], [GHC.FamInst], SDoc) -> SDoc
+pprInfo (thing, fixity, cls_insts, fam_insts, docs)
+  =  docs
+  $$ pprTyThingInContextLoc thing
   $$ show_fixity
   $$ vcat (map GHC.pprInstance cls_insts)
   $$ vcat (map GHC.pprFamInst  fam_insts)
@@ -1453,7 +1460,7 @@ changeDirectoryGHC (dir:_) = do
 editFile :: String -> InputT GHCi ()
 editFile str =
   do file <- if null str then lift chooseEditFile else expandPath str
-     st <- lift getGHCiState
+     st <- getGHCiState
      let cmd = editor st
      when (null cmd)
        $ throwGhcException (CmdLineError "editor not set, use :set editor")
@@ -1790,19 +1797,21 @@ modulesLoadedMsg ok mods = do
   when (verbosity dflags > 0) $
      liftIO $ putStrLn $ showSDocForUser dflags unqual msg
 
+-- | Inverse of 'runExceptT' for \"pure\" computations
+-- (c.f. 'except' for 'Except')
+exceptT :: Applicative m => Either e a -> ExceptT e m a
+exceptT = ExceptT . pure
+
 -----------------------------------------------------------------------------
--- | @:type-at@ command
+-- | @:type@ command
 
 typeOfExpr :: Handle -> String -> GHCi ()
-typeOfExpr
-   h str
-  = handleSourceError GHC.printException
-  $ do
+typeOfExpr h str = handleSourceError GHC.printException $ do
        ty <- GHC.exprType GHC.TM_Inst str
        printForUser h $ sep [text str, nest 2 (dcolon <+> pprTypeForUser ty)]
 
 -----------------------------------------------------------------------------
--- :type-at
+-- | @:type-at@ command
 
 typeAt :: Handle -> String -> GHCi ()
 typeAt h str =
@@ -2789,7 +2798,7 @@ showImports = do
         | not (xopt ImplicitPrelude dflags)      = []
         | otherwise = ["import Prelude -- implicit"]
 
-      trans_comment s = s ++ " -- added automatically"
+      trans_comment s = s ++ " -- added automatically" :: String
   --
   liftIO $ mapM_ putStrLn (prel_imp ++ map show_one rem_ctx
                                     ++ map (trans_comment . show_one) trans_ctx)
@@ -2803,8 +2812,8 @@ showModules = do
 
 getLoadedModules :: GHC.GhcMonad m => m [GHC.ModSummary]
 getLoadedModules = do
-  graph <- ghc_getModuleGraph
-  filterM (GHC.isLoaded . GHC.ms_mod_name) graph
+  graph <- GHC.getModuleGraph
+  filterM (GHC.isLoaded . GHC.ms_mod_name) (GHC.mgModSummaries graph)
 
 showBindings :: GHCi ()
 showBindings = do
@@ -2818,12 +2827,12 @@ showBindings = do
   where
     makeDoc (AnId i) = pprTypeAndContents i
     makeDoc tt = do
-        mb_stuff <- ghc_getInfo False (getName tt)
+        mb_stuff <- GHC.getInfo False (getName tt)
         return $ maybe (text "") pprTT mb_stuff
 
-    pprTT :: (TyThing, Fixity, [GHC.ClsInst], [GHC.FamInst]) -> SDoc
-    pprTT (thing, fixity, _cls_insts, _fam_insts)
-      = pprTyThing' thing
+    pprTT :: (TyThing, Fixity, [GHC.ClsInst], [GHC.FamInst], SDoc) -> SDoc
+    pprTT (thing, fixity, _cls_insts, _fam_insts, _docs)
+      = pprTyThing showToHeader thing
         $$ show_fixity
       where
         show_fixity
@@ -2866,10 +2875,10 @@ showPaths :: GHCi ()
 showPaths = do
   dflags <- getDynFlags
   liftIO $ do
-    cwd' <- getCurrentDirectory
+    cwd <- getCurrentDirectory
     putStrLn $ showSDoc dflags $
       text "current working directory: " $$
-        nest 2 (text cwd')
+        nest 2 (text cwd)
     let ipaths = importPaths dflags
     putStrLn $ showSDoc dflags $
       text ("module import search paths:"++if null ipaths then " none" else "") $$
@@ -2957,13 +2966,24 @@ completeGhciCommand, completeMacro, completeIdentifier, completeModule,
     completeHomeModuleOrFile, completeExpression
     :: CompletionFunc GHCi
 
+-- | Provide completions for last word in a given string.
+--
+-- Takes a tuple of two strings.  First string is a reversed line to be
+-- completed.  Second string is likely unused, 'completeCmd' always passes an
+-- empty string as second item in tuple.
 ghciCompleteWord :: CompletionFunc GHCi
 ghciCompleteWord line@(left,_) = case firstWord of
+    -- If given string starts with `:` colon, and there is only one following
+    -- word then provide REPL command completions.  If there is more than one
+    -- word complete either filename or builtin ghci commands or macros.
     ':':cmd     | null rest     -> completeGhciCommand line
                 | otherwise     -> do
                         completion <- lookupCompletion cmd
                         completion line
+    -- If given string starts with `import` keyword provide module name
+    -- completions
     "import"    -> completeModule line
+    -- otherwise provide identifier completions
     _           -> completeExpression line
   where
     (firstWord,rest) = break isSpace $ dropWhile isSpace $ reverse left
@@ -3016,8 +3036,8 @@ completeHomeModule = wrapIdentCompleter listHomeModules
 
 listHomeModules :: String -> GHCi [String]
 listHomeModules w = do
-    g <- ghc_getModuleGraph
-    let home_mods = map GHC.ms_mod_name g
+    g <- GHC.getModuleGraph
+    let home_mods = map GHC.ms_mod_name (GHC.mgModSummaries g)
     dflags <- getDynFlags
     return $ sort $ filter (w `isPrefixOf`)
             $ map (showPpr dflags) home_mods
@@ -3052,17 +3072,19 @@ unionComplete f1 f2 line = do
 
 wrapCompleter :: String -> (String -> GHCi [String]) -> CompletionFunc GHCi
 wrapCompleter breakChars fun = completeWord Nothing breakChars
-    $ fmap (map simpleCompletion) . fmap sort . fun
+    $ fmap (map simpleCompletion . nubSort) . fun
 
 wrapIdentCompleter :: (String -> GHCi [String]) -> CompletionFunc GHCi
 wrapIdentCompleter = wrapCompleter word_break_chars
 
 wrapIdentCompleterWithModifier :: String -> (Maybe Char -> String -> GHCi [String]) -> CompletionFunc GHCi
 wrapIdentCompleterWithModifier modifChars fun = completeWordWithPrev Nothing word_break_chars
-    $ \rest -> fmap (map simpleCompletion) . fmap sort . fun (getModifier rest)
+    $ \rest -> fmap (map simpleCompletion . nubSort) . fun (getModifier rest)
  where
   getModifier = find (`elem` modifChars)
 
+-- | Return a list of visible module names for autocompletion.
+-- (NB: exposed != visible)
 allExposedModules :: DynFlags -> [ModuleName]
 allExposedModules = listVisibleModuleNames
 
@@ -3594,7 +3616,7 @@ turnOffBreak loc = do
 
 getModBreak :: Module -> GHCi (ForeignRef BreakArray, Array Int SrcSpan)
 getModBreak m = do
-   mod_info <- fromJust <$> GHC.getModuleInfo m
+   mod_info      <- fromMaybe (panic "getModBreak") <$> GHC.getModuleInfo m
    let modBreaks  = GHC.modInfoModBreaks mod_info
    let arr        = GHC.modBreaks_flags modBreaks
    let ticks      = GHC.modBreaks_locs  modBreaks
@@ -3652,7 +3674,8 @@ showException se =
 
 ghciHandle :: (HasDynFlags m, ExceptionMonad m) => (SomeException -> m a) -> m a -> m a
 ghciHandle h m = gmask $ \restore -> do
-                 dflags <- getDynFlags
+                 -- Force dflags to avoid leaking the associated HscEnv
+                 !dflags <- getDynFlags
                  gcatch (restore (GHC.prettyPrintGhcErrors dflags m)) $ \e -> restore (h e)
 
 ghciTry :: GHCi a -> GHCi (Either SomeException a)
