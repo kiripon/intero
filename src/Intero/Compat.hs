@@ -22,7 +22,6 @@ import qualified Data.Graph    as SCC
 import           DynFlags
 import           GHC
 import           TyCon
-import           TyCoRep
 
 ghc_tyConFlavour :: TyCon -> String
 ghc_tyConFlavour n =
