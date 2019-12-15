@@ -24,9 +24,6 @@ module InteractiveUI (
         ghciWelcomeMsg
     ) where
 
-#include "HsVersions.h"
-
-
 -- Intero
 import qualified Data.Map                    as M
 import           Data.Version                (showVersion)
@@ -93,6 +90,7 @@ import           Util
 -- Haskell Libraries
 import           Control.Applicative         hiding (empty)
 import           Control.Concurrent          (forkIO, threadDelay)
+import           Control.Exception           (assert)
 import           Control.Monad               as Monad
 import           Control.Monad.IO.Class
 import           Control.Monad.Trans.Class
@@ -734,7 +732,7 @@ runGHCi paths maybe_exprs = do
 
   -- Get the names in scope
   names <- GHC.getRdrNamesInScope
-  modifyGHCiState (\s -> s { rdrNamesInScope = names })
+  modifyGHCiState (\state -> state { rdrNamesInScope = names })
 
   case maybe_exprs of
         Nothing ->
@@ -1528,23 +1526,23 @@ defineMacro overwrite s = do
                 ("macro '" ++ macro_name ++ "' is already defined"))
         else do
 
-  
+
 
   -- give the expression a type signature, so we can be sure we're getting
   -- something of the right type.
   let new_expr = '(' : definition ++ ") :: String -> IO String"
 
-  
+
   -- compile the expression
   handleSourceError (\e -> GHC.printException e) $ do
       hv <- GHC.compileExpr new_expr
-      
+
       let newCmd = (macro_name, lift . runMacro hv, noCompletion)
 
       -- later defined macros have precedence
-      modifyGHCiState $ \s ->
+      modifyGHCiState $ \state ->
           let filtered = [ cmd | cmd <- macros, cmdName cmd /= macro_name ]
-          in s { ghci_macros = newCmd : filtered}
+          in state { ghci_macros = newCmd : filtered}
 
 runMacro :: GHC.HValue{-String -> IO String-} -> String -> GHCi Bool
 runMacro fun s = do
@@ -1568,9 +1566,9 @@ undefineMacro str = mapM_ undef (words str)
                 ("macro '" ++ macro_name ++ "' is not defined"))
            else do
             -- This is a tad racy but really, it's a shell
-            modifyGHCiState $ \s -> 
-                s { ghci_macros = filter ((/= macro_name) . cmdName)
-                                         (ghci_macros s) }
+            modifyGHCiState $ \state ->
+                state { ghci_macros = filter ((/= macro_name) . cmdName)
+                                         (ghci_macros state) }
 
 
 -----------------------------------------------------------------------------
@@ -1600,7 +1598,7 @@ checkModule m = do
            case GHC.moduleInfo r of
              cm | Just scope <- GHC.modInfoTopLevelScope cm ->
                 let
-                    (loc, glob) = ASSERT( all isExternalName scope )
+                    (loc, glob) = assert ( all isExternalName scope ) $
                                   partition ((== modl) . GHC.moduleName . GHC.nameModule) scope
                 in
                         (text "global names: " <+> ppr glob) $$
@@ -1689,7 +1687,7 @@ doLoad retain_context howmuch = do
       loaded <- ghc_getModuleGraph >>= filterM GHC.isLoaded . map GHC.ms_mod_name
       v <- lift (fmap mod_infos getGHCiState)
       !newInfos <- collectInfo v loaded
-      lift (modifyGHCiState (\s -> s { mod_infos = newInfos, rdrNamesInScope = names }))
+      lift (modifyGHCiState (\st -> st { mod_infos = newInfos, rdrNamesInScope = names }))
     _ -> return ()
   return wasok
 
@@ -2191,7 +2189,7 @@ browseModule bang modl exports_only = do
                 -- identifiers first. We would like to improve this; see #1799.
             sorted_names = loc_sort local ++ occ_sort external
                 where
-                (local,external) = ASSERT( all isExternalName names )
+                (local,external) = assert ( all isExternalName names ) $
                                    partition ((==modl) . nameModule) names
                 occ_sort = sortBy (compare `on` nameOccName)
                 -- try to sort by src location. If the first name in our list
@@ -2416,7 +2414,7 @@ setGHCContextFromGHCiState = do
     -- XXX put prel at the end, so that guessCurrentModule doesn't pick it up.
   -- Get the names in scope
   names <- GHC.getRdrNamesInScope
-  modifyGHCiState (\s -> s { rdrNamesInScope = names })
+  modifyGHCiState (\state -> state { rdrNamesInScope = names })
 
 -- -----------------------------------------------------------------------------
 -- Utils on InteractiveImport
@@ -3106,7 +3104,7 @@ completeCmdSet s = do
   let updatedMacros = updateFirst ((== macro_name) . cmdName) (\ (name, f, _) -> (name, f, completionFunc)) macros
 
   case updatedMacros of
-    (True,  newMacros) -> modifyGHCiState $ \s -> s { ghci_macros = newMacros }
+    (True,  newMacros) -> modifyGHCiState $ \state -> state { ghci_macros = newMacros }
     (False, _)         -> throwGhcException (CmdLineError $ "Could not find macro: '" ++ macro_name ++ "'")
 
 
@@ -3167,12 +3165,12 @@ enclosingTickSpan _ (UnhelpfulSpan _) = panic "enclosingTickSpan UnhelpfulSpan"
 enclosingTickSpan md (RealSrcSpan src) = do
   ticks <- getTickArray md
   let line = srcSpanStartLine src
-  ASSERT(inRange (bounds ticks) line) do
-  let toRealSrcSpan (UnhelpfulSpan _) = panic "enclosingTickSpan UnhelpfulSpan"
-      toRealSrcSpan (RealSrcSpan s) = s
-      enclosing_spans = [ pan | (_,pan) <- ticks ! line
-                               , realSrcSpanEnd (toRealSrcSpan pan) >= realSrcSpanEnd src]
-  return . head . sortBy leftmost_largest $ enclosing_spans
+  assert (inRange (bounds ticks) line) $ do
+    let toRealSrcSpan (UnhelpfulSpan _) = panic "enclosingTickSpan UnhelpfulSpan"
+        toRealSrcSpan (RealSrcSpan s) = s
+        enclosing_spans = [ pan | (_,pan) <- ticks ! line
+                                 , realSrcSpanEnd (toRealSrcSpan pan) >= realSrcSpanEnd src]
+    return . head . sortBy leftmost_largest $ enclosing_spans
 
 traceCmd :: String -> GHCi ()
 traceCmd arg
@@ -3289,7 +3287,7 @@ breakSwitch (arg1:rest)
         let loc = GHC.srcSpanStart (GHC.nameSrcSpan name)
         case loc of
             RealSrcLoc l ->
-               ASSERT( isExternalName name )
+               assert (isExternalName name ) $
                     findBreakAndSet (GHC.nameModule name) $
                          findBreakByCoord (Just (GHC.srcLocFile l))
                                           (GHC.srcLocLine l,
@@ -3454,7 +3452,7 @@ list2 [arg] = do
         let loc = GHC.srcSpanStart (GHC.nameSrcSpan name)
         case loc of
             RealSrcLoc l ->
-               do tickArray <- ASSERT( isExternalName name )
+               do tickArray <- assert ( isExternalName name ) $
                                lift $ getTickArray (GHC.nameModule name)
                   let mb_span = findBreakByCoord (Just (GHC.srcLocFile l))
                                         (GHC.srcLocLine l, GHC.srcLocCol l)
@@ -3736,7 +3734,7 @@ wantNameFromInterpretedModule noCanDo str and_then =
    case names of
       []    -> return ()
       (n:_) -> do
-            let modl = ASSERT( isExternalName n ) GHC.nameModule n
+            let modl = assert ( isExternalName n ) $ GHC.nameModule n
             if not (GHC.isExternalName n)
                then noCanDo n $ ppr n Outputable.<>
                                 text " is not defined in an interpreted module"
