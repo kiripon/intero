@@ -21,8 +21,7 @@ import           Data.Maybe
 import           DynFlags
 import           FastString
 import           GHC
-import           GhciInfo                   (showppr)
-import           GhciTypes
+import           GhciInfo                   (showppr, ModInfo(..), SpanInfo(..))
 import           GhcMonad
 import           Intero.Compat
 import           Module

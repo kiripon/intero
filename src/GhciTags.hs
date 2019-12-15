@@ -134,12 +134,12 @@ tagInfo dflags unqual exported kind name loc
 
 
 collateAndWriteTags :: TagsKind -> FilePath -> [TagInfo] -> IO (Either IOError ())
--- ctags style with the Ex exresion being just the line number, Vim et al
+-- ctags style with the Ex expression being just the line number, Vim et al
 collateAndWriteTags CTagsWithLineNumbers file tagInfos = do
   let tags = unlines $ sort $ map showCTag tagInfos
   tryIO (writeFile file tags)
 
--- ctags style with the Ex exresion being a regex searching the line, Vim et al
+-- ctags style with the Ex expression being a regex searching the line, Vim et al
 collateAndWriteTags CTagsWithRegExes file tagInfos = do -- ctags style, Vim et al
   tagInfoGroups <- makeTagGroupsWithSrcInfo tagInfos
   let tags = unlines $ sort $ map showCTag $concat tagInfoGroups
@@ -186,7 +186,7 @@ showCTag ti =
   where
     tagCmd =
       case tagSrcInfo ti of
-        Nothing          -> show $tagLine ti
+        Nothing -> show $tagLine ti
         Just (srcLine,_) -> "/^"++ foldr escapeSlashes [] srcLine ++"$/"
 
       where

@@ -38,8 +38,8 @@ import           GHC                       (BreakIndex)
 import qualified GHC
 import           GHCi
 import           GHCi.RemoteTypes
-import           GhciTypes
 import           GhcMonad                  hiding (liftIO)
+import           GhciInfo
 import           HscTypes
 import           Module
 import           Outputable                hiding (printForUser,
@@ -53,6 +53,7 @@ import           Data.Int                  (Int64)
 import           Data.IORef
 import           Exception
 import           Numeric
+import           Prelude                   hiding ((<>))
 import           System.CPUTime
 import           System.Environment
 import           System.IO
@@ -95,26 +96,27 @@ data GHCiState = GHCiState
         cmdqueue            :: [String],
 
         remembered_ctx      :: [InteractiveImport],
-             -- the imports that the user has asked for, via import
-             -- declarations and :module commands.  This list is
-             -- persistent over :reloads (but any imports for modules
-             -- that are not loaded are temporarily ignored).  After a
-             -- :load, all the home-package imports are stripped from
-             -- this list.
-
-             -- See bugs #2049, #1873, #1360
+            -- ^ The imports that the user has asked for, via import
+            -- declarations and :module commands.  This list is
+            -- persistent over :reloads (but any imports for modules
+            -- that are not loaded are temporarily ignored).  After a
+            -- :load, all the home-package imports are stripped from
+            -- this list.
+            --
+            -- See bugs #2049, #1873, #1360
 
         transient_ctx       :: [InteractiveImport],
-             -- An import added automatically after a :load, usually of
-             -- the most recently compiled module.  May be empty if
-             -- there are no modules loaded.  This list is replaced by
-             -- :load, :reload, and :add.  In between it may be modified
-             -- by :module.
+            -- ^ An import added automatically after a :load, usually of
+            -- the most recently compiled module.  May be empty if
+            -- there are no modules loaded.  This list is replaced by
+            -- :load, :reload, and :add.  In between it may be modified
+            -- by :module.
 
-        ghc_e               :: Bool, -- True if this is 'ghc -e' (or runghc)
+        ghc_e               :: Bool, -- ^ True if this is 'ghc -e' (or runghc)
 
-        -- help text to display to a user
+        
         short_help          :: String,
+            -- ^ help text to display to a user
         long_help           :: String,
 
         -- stored state
@@ -135,10 +137,9 @@ data GHCiState = GHCiState
             -- ^ @hFlush stdout; hFlush stderr@ in the interpreter
         noBuffering         :: ForeignHValue
             -- ^ @hSetBuffering NoBuffering@ for stdin/stdout/stderr
-
      }
 
-type TickArray = Array Int [(BreakIndex,SrcSpan)]
+type TickArray = Array Int [(GHC.BreakIndex,SrcSpan)]
 
 data GHCiOption
         = ShowTiming            -- show time/allocs after evaluation
@@ -166,7 +167,7 @@ prettyLocations locs = vcat $ map (\(i, loc) -> brackets (int i) <+> ppr loc) $ 
 instance Outputable BreakLocation where
    ppr loc = (ppr $ breakModule loc) <+> ppr (breakLoc loc) <+>
                 if null (onBreakCmd loc)
-                   then empty
+                   then Outputable.empty
                    else doubleQuotes (text (onBreakCmd loc))
 
 recordBreak :: BreakLocation -> GHCi (Bool{- was already present -}, Int)
@@ -204,12 +205,11 @@ instance Functor GHCi where
     fmap = liftM
 
 instance Applicative GHCi where
-    pure = return
+    pure a = GHCi $ \_ -> pure a
     (<*>) = ap
 
 instance Monad GHCi where
   (GHCi m) >>= k  =  GHCi $ \s -> m s >>= \a -> unGHCi (k a) s
-  return a  = GHCi $ \_ -> return a
 
 class HasGhciState m where
   getGHCiState    :: m GHCiState
@@ -289,18 +289,18 @@ printForUserNeverQualify doc = do
   dflags <- getDynFlags
   liftIO $ Outputable.printForUser dflags stdout neverQualify doc
 
-printForUserModInfo :: GhcMonad m => Handle -> GHC.ModuleInfo -> SDoc -> m ()
-printForUserModInfo h info doc = do
+printForUserModInfo :: GhcMonad m => GHC.ModuleInfo -> SDoc -> m ()
+printForUserModInfo info doc = do
   dflags <- getDynFlags
   mUnqual <- GHC.mkPrintUnqualifiedForModule info
   unqual <- maybe GHC.getPrintUnqual return mUnqual
-  liftIO $ Outputable.printForUser dflags h unqual doc
+  liftIO $ Outputable.printForUser dflags stdout unqual doc
 
-printForUser :: GhcMonad m => Handle -> SDoc -> m ()
-printForUser h doc = do
+printForUser :: GhcMonad m => SDoc -> m ()
+printForUser doc = do
   unqual <- GHC.getPrintUnqual
   dflags <- getDynFlags
-  liftIO $ Outputable.printForUser dflags h unqual doc
+  liftIO $ Outputable.printForUser dflags stdout unqual doc
 
 printForUserPartWay :: SDoc -> GHCi ()
 printForUserPartWay doc = do
@@ -366,7 +366,7 @@ printTimes dflags allocs psecs
    = do let secs = (fromIntegral psecs / (10^(12::Integer))) :: Float
             secs_str = showFFloat (Just 2) secs
         putStrLn (showSDoc dflags (
-                 parens (text (secs_str "") <+> text "secs" Outputable.<> comma <+>
+                 parens (text (secs_str "") <+> text "secs" <> comma <+>
                          text (show allocs) <+> text "bytes")))
 
 -----------------------------------------------------------------------------
@@ -399,12 +399,14 @@ initInterpBuffering = do
        " System.IO.hFlush System.IO.stderr }"
   return (nobuf, flush)
 
+-- | Invoke "hFlush stdout; hFlush stderr" in the interpreter
 flushInterpBuffers :: GHCi ()
 flushInterpBuffers = do
   st <- getGHCiState
   hsc_env <- GHC.getSession
   liftIO $ evalIO hsc_env (flushStdHandles st)
 
+-- | Turn off buffering for stdin, stdout, and stderr in the interpreter
 turnOffBuffering :: GHCi ()
 turnOffBuffering = do
   st <- getGHCiState

@@ -62,7 +62,6 @@ executable intero
     InteractiveUI
     GhciMonad
     GhciTags
-    GhciTypes
     GhciInfo
     GhciFind
     Intero.Compat

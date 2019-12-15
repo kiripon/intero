@@ -1,5 +1,5 @@
+{-# LANGUAGE CPP                      #-}
 {-# LANGUAGE NondecreasingIndentation #-}
-{-# LANGUAGE CPP #-}
 {-# OPTIONS -fno-warn-incomplete-patterns -optc-DNON_POSIX_SOURCE -fno-warn-warnings-deprecations #-}
 {-# LANGUAGE ForeignFunctionInterface #-}
 
@@ -14,62 +14,60 @@
 module Main (main) where
 
 -- The official GHC API
-import qualified Data.Version (showVersion)
-import qualified GHC
-import GHC              ( -- DynFlags(..), HscTarget(..),
-                          -- GhcMode(..), GhcLink(..),
-                          Ghc, GhcMonad(..),
-                          LoadHowMuch(..) )
 import           CmdLineParser
+import qualified Data.Version       (showVersion)
+import           GHC                (Ghc, GhcMonad (..), LoadHowMuch (..))
+import qualified GHC
 import qualified Paths_intero
 
 -- ghci-ng
 import qualified GHC.Paths
-import Intero.Compat
+import           Intero.Compat
 
 -- Implementations of the various modes (--show-iface, mkdependHS. etc.)
-import           LoadIface ( showIface )
-import           HscMain ( newHscEnv )
-import           DriverPipeline ( oneShot, compileFile )
-import           DriverMkDepend ( doMkDependHS )
-#ifdef GHCI
-import           InteractiveUI ( interactiveUI, ghciWelcomeMsg, defaultGhciSettings )
+import           DriverMkDepend     (doMkDependHS)
+import           DriverPipeline     (compileFile, oneShot)
+import           HscMain            (newHscEnv)
+import           LoadIface          (showIface)
+#if defined(GHCI)
+import           InteractiveUI      (defaultGhciSettings, ghciWelcomeMsg,
+                                     interactiveUI)
 #endif
 
 
 -- Various other random stuff that we need
+import           BasicTypes         (failed)
 import           Config
 import           Constants
-import           HscTypes
-import           Packages ( pprPackages )
 import           DriverPhases
-import           BasicTypes ( failed )
 import           DynFlags
 import           ErrUtils
 import           FastString
+import           HscTypes
+import           MonadUtils         (liftIO)
 import           Outputable
+import           Packages           (pprPackages)
+import           Panic
 import           SrcLoc
 import           Util
-import           Panic
-import           MonadUtils ( liftIO )
 
 -- Imports for --abi-hash
-import           LoadIface ( loadUserInterface )
-import           Module ( mkModuleName )
-import           Finder ( findImportedModule, cannotFindModule )
-import           TcRnMonad ( initIfaceCheck )
-import           Binary ( openBinMem, put_ )
-import           BinFingerprint ( fingerprintBinMem )
+import           Binary             (openBinMem, put_)
+import           BinFingerprint     (fingerprintBinMem)
+import           Finder             (cannotFindModule, findImportedModule)
+import           LoadIface          (loadUserInterface)
+import           Module             (mkModuleName)
+import           TcRnMonad          (initIfaceCheck)
 
 -- Standard Haskell libraries
-import           System.IO
-import           System.Environment
-import           System.Exit
-import           System.FilePath
 import           Control.Monad
 import           Data.Char
 import           Data.List
 import           Data.Maybe
+import           System.Environment
+import           System.Exit
+import           System.FilePath
+import           System.IO
 
 -----------------------------------------------------------------------------
 -- ToDo:
@@ -146,10 +144,10 @@ main = do
                 Left preLoadMode ->
                     liftIO $ do
                         case preLoadMode of
-                            ShowInfo               -> showInfo dflags
-                            ShowGhcUsage           -> showGhcUsage  dflags
-                            ShowGhciUsage          -> showGhciUsage dflags
-                            PrintWithDynFlags f    -> putStrLn (f dflags)
+                            ShowInfo            -> showInfo dflags
+                            ShowGhcUsage        -> showGhcUsage  dflags
+                            ShowGhciUsage       -> showGhciUsage dflags
+                            PrintWithDynFlags f -> putStrLn (f dflags)
                 Right postLoadMode ->
                     main' postLoadMode dflags argv3 flagWarnings
 
@@ -163,12 +161,12 @@ main' postLoadMode dflags0 args flagWarnings = do
   let dflt_target = hscTarget dflags0
       (mode, lang, link)
          = case postLoadMode of
-               DoInteractive   -> (CompManager, HscInterpreted, LinkInMemory)
-               DoEval _        -> (CompManager, HscInterpreted, LinkInMemory)
-               DoMake          -> (CompManager, dflt_target,    LinkBinary)
-               DoMkDependHS    -> (MkDepend,    dflt_target,    LinkBinary)
-               DoAbiHash       -> (OneShot,     dflt_target,    LinkBinary)
-               _               -> (OneShot,     dflt_target,    LinkBinary)
+               DoInteractive -> (CompManager, HscInterpreted, LinkInMemory)
+               DoEval _      -> (CompManager, HscInterpreted, LinkInMemory)
+               DoMake        -> (CompManager, dflt_target,    LinkBinary)
+               DoMkDependHS  -> (MkDepend,    dflt_target,    LinkBinary)
+               DoAbiHash     -> (OneShot,     dflt_target,    LinkBinary)
+               _             -> (OneShot,     dflt_target,    LinkBinary)
 
   let dflags1 = case lang of
                 HscInterpreted ->
@@ -234,11 +232,11 @@ main' postLoadMode dflags0 args flagWarnings = do
   hsc_env <- GHC.getSession
 
         ---------------- Display configuration -----------
-  when (verbosity dflags6 >= 4) $
-        let dumpPackages flags = putStrLn $ show $ runSDoc (pprPackages flags) ctx
-                where ctx = initSDocContext flags (defaultDumpStyle dflags6)
-        in
-        liftIO $ dumpPackages dflags6
+  case verbosity dflags6 of
+    v | v >= 4 -> let dumpPackages flags = putStrLn $ show $ runSDoc (pprPackages flags) ctx
+                        where ctx = initSDocContext flags (defaultDumpStyle dflags6)
+                  in liftIO $ dumpPackages dflags6
+      | otherwise -> return ()
 
         ---------------- Final sanity checking -----------
   liftIO $ checkOptions postLoadMode dflags6 srcs objs
@@ -248,18 +246,18 @@ main' postLoadMode dflags0 args flagWarnings = do
        GHC.printException e
        liftIO $ exitWith (ExitFailure 1)) $ do
     case postLoadMode of
-       ShowInterface f        -> liftIO $ doShowIface dflags6 f
-       DoMake                 -> doMake srcs
-       DoMkDependHS           -> doMkDependHS (map fst srcs)
-       StopBefore p           -> liftIO (oneShot hsc_env p srcs)
-       DoInteractive          -> ghciUI srcs Nothing
-       DoEval exprs           -> ghciUI srcs $ Just $ reverse exprs
-       DoAbiHash              -> abiHash srcs
+       ShowInterface f -> liftIO $ doShowIface dflags6 f
+       DoMake          -> doMake srcs
+       DoMkDependHS    -> doMkDependHS (map fst srcs)
+       StopBefore p    -> liftIO (oneShot hsc_env p srcs)
+       DoInteractive   -> ghciUI srcs Nothing
+       DoEval exprs    -> ghciUI srcs $ Just $ reverse exprs
+       DoAbiHash       -> abiHash srcs
 
   liftIO $ dumpFinalStats dflags6
 
 ghciUI :: [(FilePath, Maybe Phase)] -> Maybe [String] -> Ghc ()
-#ifndef GHCI
+#if !defined(GHCI)
 ghciUI _ _ = throwGhcException (CmdLineError "not built for interactive use")
 #else
 ghciUI     = interactiveUI defaultGhciSettings
@@ -359,7 +357,6 @@ checkOptions mode dflags srcs objs = do
      -- Verify that output files point somewhere sensible.
    verifyOutputFiles dflags
 
-
 -- Compiler output options
 
 -- called to verify that the output files & directories
@@ -411,11 +408,11 @@ mkPreStartupMode = Left
 
 isShowVersionMode :: Mode -> Bool
 isShowVersionMode (Left ShowVersion) = True
-isShowVersionMode _ = False
+isShowVersionMode _                  = False
 
 isShowNumVersionMode :: Mode -> Bool
 isShowNumVersionMode (Left ShowNumVersion) = True
-isShowNumVersionMode _ = False
+isShowNumVersionMode _                     = False
 
 data PreLoadMode
   = ShowGhcUsage                           -- ghc -?
@@ -438,11 +435,11 @@ mkPreLoadMode = Right . Left
 
 isShowGhcUsageMode :: Mode -> Bool
 isShowGhcUsageMode (Right (Left ShowGhcUsage)) = True
-isShowGhcUsageMode _ = False
+isShowGhcUsageMode _                           = False
 
 isShowGhciUsageMode :: Mode -> Bool
 isShowGhciUsageMode (Right (Left ShowGhciUsage)) = True
-isShowGhciUsageMode _ = False
+isShowGhciUsageMode _                            = False
 
 data PostLoadMode
   = ShowInterface FilePath  -- ghc --show-iface
@@ -474,17 +471,17 @@ mkPostLoadMode = Right . Right
 
 isDoInteractiveMode :: Mode -> Bool
 isDoInteractiveMode (Right (Right DoInteractive)) = True
-isDoInteractiveMode _ = False
+isDoInteractiveMode _                             = False
 
 isStopLnMode :: Mode -> Bool
 isStopLnMode (Right (Right (StopBefore StopLn))) = True
-isStopLnMode _ = False
+isStopLnMode _                                   = False
 
 isDoMakeMode :: Mode -> Bool
 isDoMakeMode (Right (Right DoMake)) = True
-isDoMakeMode _ = False
+isDoMakeMode _                      = False
 
-#ifdef GHCI
+#if defined(GHCI)
 isInteractiveMode :: PostLoadMode -> Bool
 isInteractiveMode DoInteractive = True
 isInteractiveMode _             = False
@@ -497,10 +494,10 @@ isInterpretiveMode (DoEval _)    = True
 isInterpretiveMode _             = False
 
 needsInputsMode :: PostLoadMode -> Bool
-needsInputsMode DoMkDependHS    = True
-needsInputsMode (StopBefore _)  = True
-needsInputsMode DoMake          = True
-needsInputsMode _               = False
+needsInputsMode DoMkDependHS   = True
+needsInputsMode (StopBefore _) = True
+needsInputsMode DoMake         = True
+needsInputsMode _              = False
 
 -- True if we are going to attempt to link in this mode.
 -- (we might not actually link, depending on the GhcLink flag)
@@ -532,8 +529,9 @@ parseModeFlags args = do
              Nothing     -> doMakeMode
              Just (m, _) -> m
       errs = errs1 ++ map ghc_mkErr (map (mkGeneralLocated "on the commandline") errs2)
-  when (not (null errs)) $ throwGhcException
-                             $ errorsToGhcException $ map (\(L sp e) -> (show sp, e)) (map ghc_errMsg errs)
+  unless (null errs) $ throwGhcException $ errorsToGhcException $
+      map (\(L sp e) -> (show sp, e)) (map ghc_errMsg errs)
+
   return (mode, flags' ++ leftover, map ghc_warnMsg warns)
 
 type ModeM = CmdLineP (Maybe (Mode, String), [String], [Located String])
@@ -700,7 +698,7 @@ showBanner :: PostLoadMode -> DynFlags -> IO ()
 showBanner _postLoadMode dflags = do
    let verb = verbosity dflags
 
-#ifdef GHCI
+#if defined(GHCI)
    -- Show the GHCi banner
    when (isInteractiveMode _postLoadMode && verb >= 1) $ putStrLn ghciWelcomeMsg
 #endif
