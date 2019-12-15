@@ -486,23 +486,6 @@ default_stop = ""
 default_args :: [String]
 default_args = []
 
-
-compat_ExtendedDefaultRules :: Extension
-compat_ExtendedDefaultRules =
-  ExtendedDefaultRules
-
-compat_AlternativeLayoutRule :: Extension
-compat_AlternativeLayoutRule =
-  AlternativeLayoutRule
-
-compat_ImplicitPrelude :: Extension
-compat_ImplicitPrelude =
-  ImplicitPrelude
-
-compat_MonomorphismRestriction :: Extension
-compat_MonomorphismRestriction =
-  MonomorphismRestriction
-
 interactiveUI :: GhciSettings -> [(FilePath, Maybe Phase)] -> Maybe [String]
               -> Ghc ()
 interactiveUI config srcs maybe_exprs = do
@@ -2413,7 +2396,7 @@ setGHCContextFromGHCiState = do
   iidecls <- filterM (tryBool.checkAdd) (transient_ctx st ++ remembered_ctx st)
   dflags <- GHC.getSessionDynFlags
   GHC.setContext $
-     if xopt compat_ImplicitPrelude dflags && not (any isPreludeImport iidecls)
+     if xopt ImplicitPrelude dflags && not (any isPreludeImport iidecls)
         then iidecls ++ [implicitPreludeImport]
         else iidecls
     -- XXX put prel at the end, so that guessCurrentModule doesn't pick it up.
@@ -2803,7 +2786,7 @@ showImports = do
 
       prel_imp
         | any isPreludeImport (rem_ctx ++ trans_ctx) = []
-        | not (xopt compat_ImplicitPrelude dflags)      = []
+        | not (xopt ImplicitPrelude dflags)      = []
         | otherwise = ["import Prelude -- implicit"]
 
       trans_comment s = s ++ " -- added automatically"
